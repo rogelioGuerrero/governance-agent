@@ -33,7 +33,7 @@ from pathlib import Path
 from langgraph.graph import StateGraph, END
 from langgraph.graph.message import add_messages
 
-from .groq_client import call_groq
+from .groq_client import call_groq, call_groq_with_tools
 from .graph.catalog import NomencladorGraph, load_graph_cached, clear_graph_cache
 from .standards import detect_standard, STANDARDS, get_standard_values, list_standards
 from .guardrails import validate_interoperability, CheckpointStatus
@@ -54,39 +54,13 @@ NOMENCLADOR_PATH = Path(__file__).parent.parent / "nomenclador" / "nomenclador.j
 SYSTEM_PROMPT = """Eres un agente de governance para interoperabilidad semantica.
 Tu trabajo es ayudar a verificar, mapear y transformar variables entre fuentes de datos.
 
-Tienes acceso a las siguientes tools:
-
-1. search_graph(query): Busca una variable en el nomenclador. Retorna el concepto canonico + fuentes donde se encuentra, con quality_score y review_status de cada campo.
-2. detect_standard(column_name, sample_values): Detecta el estandar para una columna. Retorna estandar candidato + confianza.
-3. validate_interop(source_db, target_db): Verifica interoperabilidad entre dos fuentes con guardrails (4 checkpoints: poblacion, metodologia, clasificador, distribucion de datos).
-4. generate_transform(source_db, target_db): Genera transformaciones SQL CASE WHEN + JSON Schema para conectar dos fuentes.
-5. list_concepts(): Lista todos los conceptos canonicos del nomenclador.
-6. get_classifier(standard_id): Obtiene los valores validos de un estandar.
-7. get_concept_context(query): Retorna contexto completo de un concepto (campos, calidad, normativas, conflictos, clasificador) en una sola llamada. PREFIERE esta tool sobre search_graph cuando necesites informacion detallada.
-8. verify_field(field_id): Verificacion DETERMINISTA (sin LLM) de que los sample_values de un campo estan dentro del clasificador. Retorna match ratio y valores invalidos.
-9. verify_mapping(classifier_a, classifier_b): Verificacion DETERMINISTA de biyectividad del mapping entre dos clasificadores.
-10. compute_confidence(concept_name): Score DETERMINISTA de confidence para interoperabilidad de cada field del concepto. Combina quality_score + review_status + staleness + classifier_match.
-11. compute_transform(source_db, target_db): Genera SQL CASE WHEN DETERMINISTA desde el mapping del grafo, sin LLM. Mas confiable que generate_transform.
-12. audit_graph(): Audit DETERMINISTA de invariantes del grafo (edges validos, nodos huerfanos, fields sin concepto, etc).
-13. ask_human(question): Pregunta al humano cuando necesitas aclaracion.
-14. graph_health(): Diagnostico completo del estado del governance-agent (connectivity, cobertura, calidad, nodos huerfanos, proposals stale). Usa para auto-monitoreo.
-15. fix_orphans(dry_run): Auto-healing de nodos huerfanos. Busca conceptos similares y linkea fields sin concepto. dry_run=true solo sugiere, false aplica.
-16. retry_proposals(dry_run): Auto-healing de nodos proposed stale. Auto-aprueba los de alta calidad (>=0.7) que llevan 7+ dias, flaggea los de baja calidad para revision manual.
-
-FORMATO DE RESPUESTA — debes responder en EXACTAMENTE este formato:
-
-Si necesitas usar una tool:
-THOUGHT: <tu razonamiento sobre qué hacer y por qué>
-ACTION: <nombre_tool>
-ACTION_INPUT: <json con los argumentos de la tool>
-
-Si ya tienes toda la información para responder:
-THOUGHT: <tu razonamiento final>
-FINAL: <respuesta completa al usuario>
+Tienes acceso a tools nativas (function calling). Usa las tools cuando necesites informacion
+o ejecutar acciones. Cuando ya tengas toda la informacion, responde directamente al usuario
+sin usar tools.
 
 REGLAS:
 - Una sola tool por turno.
-- Siempre piensa antes de actuar.
+- Siempre razona brevemente antes de actuar (en el campo content).
 - Si los guardrails detectan asimetría, mencionalo explicitamente.
 - Si no estás seguro, usa ask_human.
 - Responde en español.
@@ -98,7 +72,7 @@ REGLAS:
 - REVIEW STATUS: Si un campo esta en "proposed" o "rejected", no usarlo para transformaciones.
 - STALENESS: Si last_verified tiene mas de 180 dias, mencionar que el dato podria estar desactualizado.
 - COMPUTE, DON'T GUESS: Prefiere tools deterministas (verify_field, verify_mapping, compute_confidence, compute_transform, audit_graph) sobre razonamiento probabilistico. Usa generate_transform solo cuando compute_transform no encuentre mapping en el grafo. Usa validate_interop para guardrails cualitativos, pero SIEMPRE complementa con compute_confidence para el score cuantitativo.
-- SELF-MONITORING: Usa graph_health() para diagnosticar el estado del grafo. Si detectas nodos huerfanos, usa fix_orphans. Si hay proposals stale, usa retry_proposals. Auto-sana lo que puedas, flaggea lo que requiera humano.
+- SELF-MONITORING: Usa graph_health para diagnosticar el estado del grafo. Si detectas nodos huerfanos, usa fix_orphans. Si hay proposals stale, usa retry_proposals. Auto-sana lo que puedas, flaggea lo que requiera humano.
 - AUTO-HEALING: Despues de ingest o nomenclar, considera ejecutar graph_health para verificar que el grafo quedo consistente. Si hay violaciones, intenta fix_orphans antes de reportar al humano.
 """
 
@@ -112,6 +86,7 @@ class AgentState(TypedDict):
     current_thought: str
     current_action: str
     current_action_input: str
+    tool_call_id: str  # ID del tool_call para feed-back nativo
     tool_result: str
     iteration: int
     final_answer: str
@@ -473,65 +448,94 @@ TOOLS_SCHEMA = {
     "retry_proposals": {"dry_run": "bool"},
 }
 
+# Descripciones de tools para el schema OpenAI
+_TOOL_DESCRIPTIONS = {
+    "search_graph": "Busca una variable en el nomenclador. Retorna concepto canonico + fuentes con quality_score y review_status.",
+    "detect_standard": "Detecta el estandar para una columna dado su nombre y valores muestra.",
+    "validate_interop": "Verifica interoperabilidad entre dos fuentes con guardrails (poblacion, metodologia, clasificador, distribucion).",
+    "generate_transform": "Genera transformaciones SQL CASE WHEN + JSON Schema para conectar dos fuentes.",
+    "list_concepts": "Lista todos los conceptos canonicos del nomenclador.",
+    "get_classifier": "Obtiene los valores validos de un estandar.",
+    "get_concept_context": "Retorna contexto completo de un concepto (campos, calidad, normativas, conflictos, clasificador).",
+    "verify_field": "Verificacion determinista de que los sample_values de un campo estan dentro del clasificador.",
+    "verify_mapping": "Verificacion determinista de biyectividad del mapping entre dos clasificadores.",
+    "compute_confidence": "Score determinista de confidence para interoperabilidad de cada field del concepto.",
+    "compute_transform": "Genera SQL CASE WHEN determinista desde el mapping del grafo, sin LLM.",
+    "audit_graph": "Audit determinista de invariantes del grafo (edges validos, nodos huerfanos, fields sin concepto).",
+    "ask_human": "Pregunta al humano cuando necesitas aclaracion.",
+    "graph_health": "Diagnostico completo del estado del governance-agent: connectivity, cobertura, calidad, nodos huerfanos, proposals stale.",
+    "fix_orphans": "Auto-healing de nodos huerfanos. Busca conceptos similares y linkea fields sin concepto. dry_run=true solo sugiere.",
+    "retry_proposals": "Auto-healing de nodos proposed stale. Auto-aprueba alta calidad (>=0.7) con 7+ dias, flaggea baja calidad.",
+}
 
-# === NODES ===
+# Mapeo de tipos Python a tipos OpenAI
+_PY_TO_OPENAI_TYPE = {
+    "str": "string",
+    "bool": "boolean",
+    "int": "integer",
+    "float": "number",
+    "list[str]": "array",
+}
 
-def _parse_response(response: str) -> dict:
-    """
-    Parsear la respuesta del LLM en formato ReAct.
-    Maneja variaciones de formato que el LLM puede producir.
-    """
-    result = {"thought": "", "action": "", "action_input": "", "final": ""}
-    
-    lines = response.strip().split("\n")
-    current_field = None
-    current_buffer = []
-    
-    for line in lines:
-        stripped = line.strip()
-        
-        if stripped.upper().startswith("THOUGHT:"):
-            if current_field:
-                result[current_field] = "\n".join(current_buffer).strip()
-            current_field = "thought"
-            current_buffer = [stripped[len("THOUGHT:"):].strip()]
-        elif stripped.upper().startswith("ACTION:"):
-            if current_field:
-                result[current_field] = "\n".join(current_buffer).strip()
-            current_field = "action"
-            current_buffer = [stripped[len("ACTION:"):].strip()]
-        elif stripped.upper().startswith("ACTION_INPUT:"):
-            if current_field:
-                result[current_field] = "\n".join(current_buffer).strip()
-            current_field = "action_input"
-            current_buffer = [stripped[len("ACTION_INPUT:"):].strip()]
-        elif stripped.upper().startswith("FINAL:"):
-            if current_field:
-                result[current_field] = "\n".join(current_buffer).strip()
-            current_field = "final"
-            current_buffer = [stripped[len("FINAL:"):].strip()]
-        elif current_field:
-            current_buffer.append(stripped)
-    
-    if current_field:
-        result[current_field] = "\n".join(current_buffer).strip()
-    
-    return result
 
+def _build_openai_tools_schema() -> list[dict]:
+    """Generar schema de tools en formato OpenAI function calling desde TOOLS_SCHEMA."""
+    tools = []
+    for name, params in TOOLS_SCHEMA.items():
+        properties = {}
+        required = []
+        for param_name, param_type in params.items():
+            openai_type = _PY_TO_OPENAI_TYPE.get(param_type, "string")
+            prop = {"type": openai_type}
+            if openai_type == "array":
+                prop["items"] = {"type": "string"}
+            properties[param_name] = prop
+            required.append(param_name)
+
+        tool = {
+            "type": "function",
+            "function": {
+                "name": name,
+                "description": _TOOL_DESCRIPTIONS.get(name, name),
+                "parameters": {
+                    "type": "object",
+                    "properties": properties,
+                    "required": required,
+                },
+            },
+        }
+        tools.append(tool)
+    return tools
+
+
+OPENAI_TOOLS_SCHEMA = _build_openai_tools_schema()
+
+
+# === NODES (native tool calling) ===
 
 def think_node(state: AgentState) -> AgentState:
-    """El LLM razona y decide qué hacer."""
+    """El LLM razona y decide qué tool usar (o responder directamente) via function calling nativo."""
     scratchpad_text = "\n".join(state.get("scratchpad", []))
-    
+
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT},
         {"role": "user", "content": f"Pregunta del usuario: {state['user_query']}\n\nHistorial de acciones:\n{scratchpad_text}\n\n¿Qué haces ahora?"},
     ]
-    
+
+    # Si hay resultados de tools previos, incluirlos como mensajes tool
+    tool_messages = state.get("messages", [])
+    if tool_messages:
+        messages.extend(tool_messages)
+
     try:
-        response = call_groq(messages, temperature=0.2, max_tokens=1000)
+        result = call_groq_with_tools(
+            messages,
+            tools=OPENAI_TOOLS_SCHEMA,
+            temperature=0.2,
+            max_tokens=2000,
+        )
     except Exception as e:
-        logger.warning("think_node: call_groq fallo: %s", e)
+        logger.warning("think_node: call_groq_with_tools fallo: %s", e)
         return {
             **state,
             "current_thought": f"Error: LLM no disponible ({e})",
@@ -540,54 +544,86 @@ def think_node(state: AgentState) -> AgentState:
             "final_answer": f"No pude procesar la consulta: el servicio LLM fallo ({e}). Intenta de nuevo.",
             "iteration": state.get("iteration", 0) + 1,
         }
-    
-    parsed = _parse_response(response)
-    
+
+    content = result.get("content", "")
+    tool_calls = result.get("tool_calls")
+
+    # Si no hay tool_calls, el LLM responde directamente → final
+    if not tool_calls:
+        return {
+            **state,
+            "current_thought": content,
+            "current_action": "",
+            "current_action_input": "",
+            "final_answer": content,
+            "iteration": state.get("iteration", 0) + 1,
+        }
+
+    # Hay tool_calls — tomar la primera (regla: una tool por turno)
+    first_call = tool_calls[0]
+    tool_name = first_call["function"]["name"]
+    tool_args_raw = first_call["function"]["arguments"]
+    tool_call_id = first_call.get("id", "")
+
+    try:
+        tool_args = json.loads(tool_args_raw) if tool_args_raw else {}
+    except json.JSONDecodeError:
+        tool_args = {"query": tool_args_raw} if tool_args_raw else {}
+
     return {
         **state,
-        "current_thought": parsed["thought"],
-        "current_action": parsed["action"],
-        "current_action_input": parsed["action_input"],
-        "final_answer": parsed["final"],
+        "current_thought": content,
+        "current_action": tool_name,
+        "current_action_input": json.dumps(tool_args),
+        "tool_call_id": tool_call_id,
         "iteration": state.get("iteration", 0) + 1,
     }
 
 
 def act_node(state: AgentState) -> AgentState:
-    """Ejecuta la tool seleccionada."""
+    """Ejecuta la tool seleccionada por el LLM via function calling."""
     action = state.get("current_action", "").strip()
     action_input_raw = state.get("current_action_input", "").strip()
-    
+    tool_call_id = state.get("tool_call_id", "")
+
     if action == "ask_human":
         return {
             **state,
             "tool_result": f"NEEDS_HUMAN_INPUT: {action_input_raw}",
             "needs_human_input": action_input_raw,
         }
-    
+
     if action not in TOOLS:
         return {
             **state,
             "tool_result": f"Error: tool '{action}' no existe. Tools disponibles: {', '.join(TOOLS.keys())}",
         }
-    
-    # Parsear action_input como JSON
+
     try:
         args = json.loads(action_input_raw) if action_input_raw else {}
     except json.JSONDecodeError:
-        # Intentar parsear como string simple
         args = {"query": action_input_raw} if action_input_raw else {}
-    
-    # Ejecutar tool
+
     try:
         result = TOOLS[action](**args) if args else TOOLS[action]()
     except Exception as e:
         logger.warning("act_node: tool %r fallo: %s", action, e)
         result = f"Error ejecutando {action}: {e}"
-    
+
+    # Construir mensaje tool para feed-back al LLM en el proximo think
+    tool_msg = {
+        "role": "tool",
+        "tool_call_id": tool_call_id,
+        "content": str(result)[:2000],
+    }
+
+    messages = state.get("messages", [])
+    messages.append(tool_msg)
+
     return {
         **state,
         "tool_result": result,
+        "messages": messages,
     }
 
 
@@ -678,7 +714,7 @@ def build_agent_graph():
 def run_agent(query: str, max_iterations: int = 8) -> dict:
     """
     Ejecutar el agente ReAct con una consulta del usuario.
-    Retorna dict con: final_answer, scratchpad, needs_human_input.
+    Retorna dict con: final_answer, scratchpad, needs_human_input, iterations, tools_used, health_verified.
     """
     app = build_agent_graph()
     
@@ -689,6 +725,7 @@ def run_agent(query: str, max_iterations: int = 8) -> dict:
         current_thought="",
         current_action="",
         current_action_input="",
+        tool_call_id="",
         tool_result="",
         iteration=0,
         final_answer="",
@@ -696,10 +733,36 @@ def run_agent(query: str, max_iterations: int = 8) -> dict:
     )
     
     result = app.invoke(initial_state, {"recursion_limit": max_iterations * 3})
-    
+
+    # === POST-EXECUTION VERIFICATION ===
+    # Extraer qué tools fueron usadas del scratchpad
+    scratchpad = result.get("scratchpad", [])
+    tools_used = []
+    for entry in scratchpad:
+        # Cada entry tiene formato "THOUGHT: ...\nACTION: <tool_name>\nOBSERVATION: ..."
+        for line in entry.split("\n"):
+            if line.startswith("ACTION:"):
+                tool_name = line[len("ACTION:"):].strip()
+                if tool_name:
+                    tools_used.append(tool_name)
+
+    # Verificar si el agente usó graph_health cuando era relevante
+    health_keywords = ["health", "salud", "orphan", "huérfano", "stale", "proposal", "auto-heal", "monitoreo"]
+    query_lower = query.lower()
+    health_relevant = any(kw in query_lower for kw in health_keywords)
+    health_verified = "graph_health" in tools_used
+
+    if health_relevant and not health_verified and not result.get("needs_human_input"):
+        logger.warning(
+            "run_agent: query parece requerir graph_health pero no fue usada. "
+            "Tools usadas: %s", tools_used
+        )
+
     return {
         "final_answer": result.get("final_answer", ""),
-        "scratchpad": result.get("scratchpad", []),
+        "scratchpad": scratchpad,
         "needs_human_input": result.get("needs_human_input", ""),
         "iterations": result.get("iteration", 0),
+        "tools_used": tools_used,
+        "health_verified": health_verified,
     }

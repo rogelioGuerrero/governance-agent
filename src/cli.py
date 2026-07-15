@@ -1280,6 +1280,15 @@ def cmd_agent(query: str):
         console.print("[yellow]El agente no pudo generar una respuesta final.[/yellow]")
         console.print(f"[dim]Iteraciones: {result.get('iterations', 0)}[/dim]")
 
+    # Mostrar tools usadas y verificación de health
+    tools_used = result.get("tools_used", [])
+    if tools_used:
+        console.print(f"\n[dim]Tools usadas: {', '.join(tools_used)}[/dim]")
+    if result.get("health_verified"):
+        console.print("[green]✓ graph_health fue usada[/green]")
+    elif not result.get("needs_human_input") and tools_used:
+        console.print(f"[dim]Health check: no ejecutado[/dim]")
+
 
 def cmd_moa(query: str):
     """Ejecutar MoA multi-agente (juridico + tecnico + estadistico + sintetizador)."""

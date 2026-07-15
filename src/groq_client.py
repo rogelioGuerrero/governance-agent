@@ -100,3 +100,95 @@ def call_groq(
                     log.error("%s falló tras 3 intentos: %s", mdl, e)
 
     raise RuntimeError("Groq: todos los modelos fallaron")
+
+
+def call_groq_with_tools(
+    messages: list[dict],
+    tools: list[dict] | None = None,
+    model: str | None = None,
+    temperature: float = 0.3,
+    max_tokens: int = 4000,
+    timeout: int = 45,
+) -> dict:
+    """
+    Llamar a Groq con soporte nativo de tool calling (function calling).
+
+    A diferencia de call_groq(), retorna el mensaje completo del asistente
+    incluyendo tool_calls (no solo content).
+
+    Args:
+        messages: lista de mensajes en formato OpenAI (incluyendo role=tool)
+        tools: lista de tool schemas en formato OpenAI function calling
+        model: modelo a usar (default: PRIMARY_MODEL)
+        temperature: temperatura
+        max_tokens: máximo de tokens
+        timeout: timeout en segundos
+
+    Returns:
+        dict con: content (str), tool_calls (list|None), role (str)
+        Ejemplo: {"role": "assistant", "content": "...", "tool_calls": [...]}
+    """
+    if not GROQ_API_KEY:
+        raise RuntimeError("GROQ_API_KEY no configurada. Verifica .env o variables de entorno.")
+
+    models_to_try = [model or PRIMARY_MODEL]
+    if model is None:
+        models_to_try.append(FALLBACK_MODEL)
+
+    headers = {
+        "Authorization": f"Bearer {GROQ_API_KEY}",
+        "Content-Type": "application/json",
+    }
+
+    for attempt, mdl in enumerate(models_to_try):
+        for retry in range(3):
+            try:
+                body = {
+                    "model": mdl,
+                    "messages": messages,
+                    "temperature": temperature,
+                    "max_tokens": max_tokens,
+                }
+                if tools:
+                    body["tools"] = tools
+                    body["tool_choice"] = "auto"
+
+                with httpx.Client(timeout=timeout) as client:
+                    resp = client.post(GROQ_URL, headers=headers, json=body)
+
+                if resp.status_code == 429:
+                    wait = 2 ** (retry + 1)
+                    log.warning("429 rate limit, esperando %ss...", wait)
+                    time.sleep(wait)
+                    continue
+
+                if resp.status_code >= 500:
+                    wait = 2 ** (retry + 1)
+                    log.warning("%s, reintentando en %ss...", resp.status_code, wait)
+                    time.sleep(wait)
+                    continue
+
+                resp.raise_for_status()
+                data = resp.json()
+                message = data["choices"][0]["message"]
+
+                # message puede tener content=None cuando hay tool_calls
+                if not message.get("content") and not message.get("tool_calls"):
+                    log.warning("Respuesta vacía de %s (sin content ni tool_calls)", mdl)
+                    continue
+
+                return {
+                    "role": message.get("role", "assistant"),
+                    "content": message.get("content") or "",
+                    "tool_calls": message.get("tool_calls"),
+                }
+
+            except (httpx.HTTPError, KeyError, IndexError) as e:
+                if retry < 2:
+                    wait = 2 ** (retry + 1)
+                    log.warning("Error: %s, reintentando en %ss...", e, wait)
+                    time.sleep(wait)
+                else:
+                    log.error("%s falló tras 3 intentos: %s", mdl, e)
+
+    raise RuntimeError("Groq: todos los modelos fallaron (tool calling)")
