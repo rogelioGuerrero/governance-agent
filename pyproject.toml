@@ -1,0 +1,28 @@
+[project]
+name = "governance-agent"
+version = "0.1.0"
+description = "Agente de governance para interoperabilidad semantica - Nomenclador Institucional"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "httpx>=0.28.1",
+    "langchain-core>=1.4.9",
+    "langgraph>=1.2.8",
+    "mcp[cli]>=1.28.1",
+    "networkx>=3.6.1",
+    "psycopg[binary]>=3.2.0",
+    "python-dotenv>=1.2.2",
+    "rich>=15.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.24",
+    "ruff>=0.8",
+    "mypy>=1.13",
+]
+
+[project.scripts]
+nomenclador-mcp = "src.mcp_server:main"
+governance = "src.cli:main"

@@ -1,0 +1,6 @@
+id,nombre_completo,genero,fecha_nac,escolaridad,cie10,f_ingreso,area_urbana
+1,Juan Perez Gonzalez,1,1990-05-15,3,A00.1,2024-01-15,Si
+2,Maria Lopez Torres,2,1985-03-22,5,B15.0,2024-02-10,No
+3,Carlos Ruiz Castro,1,1978-11-30,2,K35.9,2024-03-05,Si
+4,Ana Torres Vega,2,1995-07-08,6,C50.1,2024-01-20,No
+5,Pedro Martinez Sosa,1,1982-12-01,4,J00,2024-04-12,Si

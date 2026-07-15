@@ -1,0 +1,124 @@
+departamento,cultivo,area_mz,produccion_qq,rendimiento,anio
+San Salvador,maiz,18500,832500,45.0,2020
+San Salvador,maiz,18200,819000,45.0,2021
+San Salvador,maiz,17800,801000,45.0,2022
+San Salvador,frijol,6200,186000,30.0,2020
+San Salvador,frijol,6100,183000,30.0,2021
+San Salvador,frijol,5900,177000,30.0,2022
+San Salvador,sorgo,4200,109200,26.0,2020
+San Salvador,sorgo,4100,106600,26.0,2021
+San Salvador,sorgo,4000,104000,26.0,2022
+Santa Ana,maiz,22800,1026000,45.0,2020
+Santa Ana,maiz,22500,1012500,45.0,2021
+Santa Ana,maiz,22100,994500,45.0,2022
+Santa Ana,frijol,7800,234000,30.0,2020
+Santa Ana,frijol,7600,228000,30.0,2021
+Santa Ana,frijol,7400,222000,30.0,2022
+Santa Ana,cafe,12500,75000,6.0,2020
+Santa Ana,cafe,12200,73200,6.0,2021
+Santa Ana,cafe,11800,70800,6.0,2022
+San Miguel,maiz,27500,1237500,45.0,2020
+San Miguel,maiz,27200,1224000,45.0,2021
+San Miguel,maiz,26800,1206000,45.0,2022
+San Miguel,frijol,9500,285000,30.0,2020
+San Miguel,frijol,9300,279000,30.0,2021
+San Miguel,frijol,9100,273000,30.0,2022
+San Miguel,sorgo,8500,221000,26.0,2020
+San Miguel,sorgo,8400,218400,26.0,2021
+San Miguel,sorgo,8200,213200,26.0,2022
+San Miguel,cafe,8500,51000,6.0,2020
+San Miguel,cafe,8200,49200,6.0,2021
+San Miguel,cafe,7800,46800,6.0,2022
+Usulutan,maiz,25000,1125000,45.0,2020
+Usulutan,maiz,24800,1116000,45.0,2021
+Usulutan,maiz,24500,1102500,45.0,2022
+Usulutan,frijol,8800,264000,30.0,2020
+Usulutan,frijol,8600,258000,30.0,2021
+Usulutan,frijol,8400,252000,30.0,2022
+Usulutan,cafe,15000,90000,6.0,2020
+Usulutan,cafe,14500,87000,6.0,2021
+Usulutan,cafe,14000,84000,6.0,2022
+La Union,maiz,20000,900000,45.0,2020
+La Union,maiz,19800,891000,45.0,2021
+La Union,maiz,19600,882000,45.0,2022
+La Union,frijol,7000,210000,30.0,2020
+La Union,frijol,6900,207000,30.0,2021
+La Union,frijol,6700,201000,30.0,2022
+La Union,sorgo,5500,143000,26.0,2020
+La Union,sorgo,5400,140400,26.0,2021
+La Union,sorgo,5300,137800,26.0,2022
+Morazan,maiz,15000,675000,45.0,2020
+Morazan,maiz,14800,666000,45.0,2021
+Morazan,maiz,14700,661500,45.0,2022
+Morazan,frijol,5200,156000,30.0,2020
+Morazan,frijol,5100,153000,30.0,2021
+Morazan,frijol,5000,150000,30.0,2022
+Morazan,cafe,6000,36000,6.0,2020
+Morazan,cafe,5800,34800,6.0,2021
+Morazan,cafe,5500,33000,6.0,2022
+Chalatenango,maiz,11000,495000,45.0,2020
+Chalatenango,maiz,10900,490500,45.0,2021
+Chalatenango,maiz,10800,486000,45.0,2022
+Chalatenango,frijol,3800,114000,30.0,2020
+Chalatenango,frijol,3700,111000,30.0,2021
+Chalatenango,frijol,3600,108000,30.0,2022
+Chalatenango,cafe,7000,42000,6.0,2020
+Chalatenango,cafe,6800,40800,6.0,2021
+Chalatenango,cafe,6500,39000,6.0,2022
+Cabañas,maiz,12500,562500,45.0,2020
+Cabañas,maiz,12300,553500,45.0,2021
+Cabañas,maiz,12100,544500,45.0,2022
+Cabañas,frijol,4400,132000,30.0,2020
+Cabañas,frijol,4300,129000,30.0,2021
+Cabañas,frijol,4200,126000,30.0,2022
+Cabañas,sorgo,3500,91000,26.0,2020
+Cabañas,sorgo,3400,88400,26.0,2021
+Cabañas,sorgo,3300,85800,26.0,2022
+La Paz,maiz,15000,675000,45.0,2020
+La Paz,maiz,14800,666000,45.0,2021
+La Paz,maiz,14600,657000,45.0,2022
+La Paz,frijol,5200,156000,30.0,2020
+La Paz,frijol,5100,153000,30.0,2021
+La Paz,frijol,5000,150000,30.0,2022
+San Vicente,maiz,17500,787500,45.0,2020
+San Vicente,maiz,17300,778500,45.0,2021
+San Vicente,maiz,17100,769500,45.0,2022
+San Vicente,frijol,6100,183000,30.0,2020
+San Vicente,frijol,6000,180000,30.0,2021
+San Vicente,frijol,5800,174000,30.0,2022
+San Vicente,cafe,4500,27000,6.0,2020
+San Vicente,cafe,4300,25800,6.0,2021
+San Vicente,cafe,4000,24000,6.0,2022
+Cuscatlan,maiz,10000,450000,45.0,2020
+Cuscatlan,maiz,9800,441000,45.0,2021
+Cuscatlan,maiz,9600,432000,45.0,2022
+Cuscatlan,frijol,3500,105000,30.0,2020
+Cuscatlan,frijol,3400,102000,30.0,2021
+Cuscatlan,frijol,3300,99000,30.0,2022
+Ahuachapan,maiz,12500,562500,45.0,2020
+Ahuachapan,maiz,12300,553500,45.0,2021
+Ahuachapan,maiz,12100,544500,45.0,2022
+Ahuachapan,frijol,4400,132000,30.0,2020
+Ahuachapan,frijol,4300,129000,30.0,2021
+Ahuachapan,frijol,4200,126000,30.0,2022
+Ahuachapan,cafe,8000,48000,6.0,2020
+Ahuachapan,cafe,7800,46800,6.0,2021
+Ahuachapan,cafe,7500,45000,6.0,2022
+Sonsonate,maiz,15000,675000,45.0,2020
+Sonsonate,maiz,14800,666000,45.0,2021
+Sonsonate,maiz,14600,657000,45.0,2022
+Sonsonate,frijol,5200,156000,30.0,2020
+Sonsonate,frijol,5100,153000,30.0,2021
+Sonsonate,frijol,5000,150000,30.0,2022
+Sonsonate,cafe,9000,54000,6.0,2020
+Sonsonate,cafe,8800,52800,6.0,2021
+Sonsonate,cafe,8500,51000,6.0,2022
+La Libertad,maiz,14000,630000,45.0,2020
+La Libertad,maiz,13800,621000,45.0,2021
+La Libertad,maiz,13600,612000,45.0,2022
+La Libertad,frijol,4900,147000,30.0,2020
+La Libertad,frijol,4800,144000,30.0,2021
+La Libertad,frijol,4700,141000,30.0,2022
+La Libertad,cafe,11000,66000,6.0,2020
+La Libertad,cafe,10800,64800,6.0,2021
+La Libertad,cafe,10500,63000,6.0,2022

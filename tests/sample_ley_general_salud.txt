@@ -1,0 +1,43 @@
+LEY GENERAL DE SALUD
+
+Articulo 47. Definicion de variables demograficas.
+
+Para efectos del registro de informacion en los sistemas de salud publicos y privados,
+las variables demograficas se codificaran conforme a los siguientes estandares:
+
+1. Sexo: Se utilizara la clasificacion ISO 5218, donde 0 = desconocido, 1 = masculino,
+   2 = femenino, 9 = no aplicable. Esta codificacion es obligatoria para todos los
+   sistemas de informacion en salud del pais.
+
+2. Fecha de nacimiento: Se utilizara el formato ISO 8601 (AAAA-MM-DD). Las fechas
+   deberan registrarse en calendario gregoriano. Ningun sistema podra almacenar fechas
+   en formatos no estandarizados.
+
+3. Diagnostico: Se utilizara la Clasificacion Internacional de Enfermedades, decima
+   revision (ICD-10) emitida por la Organizacion Mundial de la Salud. Todo diagnostico
+   clinico debe codificarse con el codigo ICD-10 correspondiente.
+
+Articulo 48. Proteccion de datos sensibles.
+
+Las variables de sexo, fecha de nacimiento y diagnostico se consideran datos sensibles
+y su tratamiento se regira por la Ley de Proteccion de Datos Personales.
+
+Articulo 12. Nivel educativo.
+
+Para el registro del nivel educativo de los pacientes y usuarios de servicios de salud,
+se utilizara la Clasificacion Internacional Normalizada de la Educacion (ISCED 2011)
+emitida por UNESCO. Los codigos validos son:
+0 = Educacion infantil, 1 = Primaria, 2 = Secundaria baja, 3 = Secundaria alta,
+4 = Post-secundaria no terciaria, 5 = Terciaria corta, 6 = Grado, 7 = Maestria,
+8 = Doctorado, 9 = No especificado.
+
+Articulo 55. Ocupacion.
+
+La ocupacion de los usuarios se registrara conforme a la Clasificacion Internacional
+Uniforme de Ocupaciones (ISCO-08) de la Organizacion Internacional del Trabajo.
+Los codigos principales son:
+1 = Directores y gerentes, 2 = Profesionales cientificos e intelectuales,
+3 = Tecnicos y profesionales de nivel medio, 4 = Personal de apoyo administrativo,
+5 = Trabajadores de servicios y vendedores, 6 = Agricultores calificados,
+7 = Oficiales y operarios, 8 = Operadores de maquinas, 9 = Ocupaciones elementales,
+0 = Fuerzas armadas.

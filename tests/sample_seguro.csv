@@ -1,0 +1,6 @@
+id_paciente,genero_paciente,fecha_nacimiento,nivel_instruccion,diag_cie,fecha_alta
+1,M,1980-03-15,3,A00.1,2024-01-20
+2,F,1990-07-22,5,B15.0,2024-02-15
+3,H,1985-11-30,2,J00,2024-03-10
+4,M,1975-05-08,6,K35.9,2024-04-05
+5,F,2000-01-12,4,C50.1,2024-05-18

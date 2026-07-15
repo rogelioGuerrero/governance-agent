@@ -1,0 +1,11 @@
+id_paciente,nombre,sexo,fecha_nacimiento,edad,nivel_educativo,diagnostico,fecha_ingreso,municipio,residencia_urbana
+1,Juan Perez,M,1990-05-15,34,3,A00.1,2024-01-15,SS,1
+2,Maria Lopez,F,1985-03-22,39,5,B15.0,2024-02-10,SM,0
+3,Carlos Ruiz,H,1978-11-30,46,2,K35.9,2024-03-05,SS,1
+4,Ana Torres,F,1995-07-08,29,6,C50.1,2024-01-20,SM,0
+5,Pedro Martinez,M,1982-12-01,41,4,J00,2024-04-12,SS,1
+6,Lucia Diaz,F,1988-09-25,36,3,A09.0,2024-02-28,SM,0
+7,Jorge Castro,H,1975-04-18,49,1,E11.9,2024-03-15,SS,1
+8,Carmen Vega,F,1993-02-14,31,5,I10,2024-05-01,SM,0
+9,Miguel Sosa,M,1980-06-05,44,2,S72.0,2024-04-20,SS,1
+10,Rosa Pineda,F,1990-08-30,34,4,N18.5,2024-05-10,SM,0
