@@ -519,6 +519,74 @@ def cmd_transform(db1: str, db2: str, output_dir: str = "transforms"):
     console.print(f"[bold green]Artefacto completo:[/bold green] {combined_file}")
 
 
+def _post_ingest_health(console_obj):
+    """Pipeline automático post-ingest: health check + auto-healing + audit.
+    
+    Se ejecuta después de ingest/nomenclar para verificar que el grafo
+    quedó consistente. Si hay problemas, intenta auto-sanarlos.
+    """
+    from .health import check_health, fix_orphan_nodes, retry_stuck_proposals, format_health_report
+
+    console_obj.print(f"\n[bold cyan]Post-ingest: verificación automática del grafo[/bold cyan]")
+
+    try:
+        report = check_health()
+    except Exception as e:
+        console_obj.print(f"  [red]⚠ Health check falló: {e}[/red]")
+        return
+
+    # Resumen compacto
+    passed = report["passed"]
+    icon = "[green]✓[/green]" if passed else "[red]✗[/red]"
+    console_obj.print(f"  {icon} Health: {'PASS' if passed else 'FAIL'}")
+    console_obj.print(f"  [dim]Nodos: {report['graph_stats']['total_nodes']} | Edges: {report['graph_stats']['total_edges']} | Violations: {report['graph_audit']['violations']} | Warnings: {report['graph_audit']['warnings']}[/dim]")
+
+    issues_found = False
+
+    # Auto-heal orphan nodes
+    if report["orphan_nodes"]:
+        issues_found = True
+        console_obj.print(f"  [yellow]⚠ Nodos huérfanos: {len(report['orphan_nodes'])} — intentando auto-heal...[/yellow]")
+        try:
+            result = fix_orphan_nodes(dry_run=False)
+            applied = result.get("fixes_applied", [])
+            manual = result.get("manual_needed", [])
+            if applied:
+                console_obj.print(f"  [green]  ✓ {len(applied)} nodo(s) linkeado(s) automáticamente[/green]")
+            if manual:
+                console_obj.print(f"  [yellow]  ⚠ {len(manual)} nodo(s) requieren intervención manual[/yellow]")
+        except Exception as e:
+            console_obj.print(f"  [red]  ✗ Auto-heal falló: {e}[/red]")
+
+    # Auto-heal stale proposals
+    if report["stale_proposals"]:
+        issues_found = True
+        console_obj.print(f"  [yellow]⚠ Proposals stale: {len(report['stale_proposals'])} — intentando auto-heal...[/yellow]")
+        try:
+            result = retry_stuck_proposals(dry_run=False)
+            approved = result.get("auto_approved", [])
+            flagged = result.get("flagged_manual", [])
+            alerts = result.get("alerts", [])
+            if approved:
+                console_obj.print(f"  [green]  ✓ {len(approved)} nodo(s) auto-aprobado(s)[/green]")
+            if flagged:
+                console_obj.print(f"  [yellow]  ⚠ {len(flagged)} nodo(s) requieren revisión manual[/yellow]")
+            if alerts:
+                console_obj.print(f"  [red]  ⚠ {len(alerts)} alerta(s) de proposals abandonadas[/red]")
+        except Exception as e:
+            console_obj.print(f"  [red]  ✗ Auto-heal proposals falló: {e}[/red]")
+
+    # Report violations
+    if report["graph_audit"]["violations"] > 0:
+        issues_found = True
+        console_obj.print(f"  [red]⚠ {report['graph_audit']['violations']} violación(es) de invariantes — requiere revisión manual[/red]")
+        for v in report["graph_audit"].get("violation_details", [])[:3]:
+            console_obj.print(f"  [dim]    - {v['message']}[/dim]")
+
+    if not issues_found:
+        console_obj.print(f"  [green]✓ Grafo consistente después del ingest[/green]")
+
+
 def cmd_ingest(file_path: str, auto: bool = False, use_llm: bool = False):
     """Ingerir un archivo sucio via RAG Factory."""
     from .rag_factory import create_ingestion_plan, execute_ingestion_plan, plan_to_dict
@@ -600,6 +668,8 @@ def cmd_ingest(file_path: str, auto: bool = False, use_llm: bool = False):
         for method, count in sorted(by_method.items(), key=lambda x: -x[1]):
             console.print(f"    {method:<30} {count:>3}  ({count/total*100:.0f}%)")
 
+    _post_ingest_health(console)
+
 
 def cmd_nomenclar(file_path: str, auto: bool = False):
     """Ejecutar flujo de dos rondas: descubrimiento + completado."""
@@ -628,6 +698,8 @@ def cmd_nomenclar(file_path: str, auto: bool = False):
             console.print(line.replace("[green]", "[green]").replace("[/green]", "[/green]"))
         else:
             console.print(line)
+
+    _post_ingest_health(console)
 
 
 def cmd_assign(variable: str):
