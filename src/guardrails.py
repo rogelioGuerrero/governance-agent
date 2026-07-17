@@ -121,9 +121,9 @@ def validate_interoperability(
     checkpoints.append(cp)
 
     # === Checkpoint 3: Clasificador activo ===
-    std_a = field_a.get("inferred_standard", "").strip()
-    std_b = field_b.get("inferred_standard", "").strip()
-    std_canonical = concept.get("standard", "").strip()
+    std_a = (field_a.get("inferred_standard") or "").strip()
+    std_b = (field_b.get("inferred_standard") or "").strip()
+    std_canonical = (concept.get("standard") or "").strip()
 
     if not std_a and not std_b:
         cp = CheckpointResult(

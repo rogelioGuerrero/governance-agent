@@ -1185,7 +1185,7 @@ class NomencladorGraph:
 
 _GRAPH_CACHE: NomencladorGraph | None = None
 _GRAPH_CACHE_MTIME: float = 0.0
-_NOMENCLADOR_PATH = Path(__file__).parent.parent / "nomenclador" / "nomenclador.json"
+_NOMENCLADOR_PATH = Path(__file__).parent.parent.parent / "nomenclador" / "nomenclador.json"
 
 
 def load_graph_cached() -> NomencladorGraph:

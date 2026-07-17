@@ -24,17 +24,18 @@ Ejemplo:
     FINAL: "No recomendado por asimetría de contexto, pero generé las transformaciones..."
 """
 
+import csv
 import json
 import logging
 import re
-from typing import TypedDict, Annotated, Optional
+from typing import TypedDict, Optional
 from pathlib import Path
 
 from langgraph.graph import StateGraph, END
-from langgraph.graph.message import add_messages
 
 from .groq_client import call_groq, call_groq_with_tools
 from .graph.catalog import NomencladorGraph, load_graph_cached, clear_graph_cache
+from .graph.schema import EdgeType
 from .standards import detect_standard, STANDARDS, get_standard_values, list_standards
 from .guardrails import validate_interoperability, CheckpointStatus
 from .transformer import generate_transformation
@@ -74,13 +75,14 @@ REGLAS:
 - COMPUTE, DON'T GUESS: Prefiere tools deterministas (verify_field, verify_mapping, compute_confidence, compute_transform, audit_graph) sobre razonamiento probabilistico. Usa generate_transform solo cuando compute_transform no encuentre mapping en el grafo. Usa validate_interop para guardrails cualitativos, pero SIEMPRE complementa con compute_confidence para el score cuantitativo.
 - SELF-MONITORING: Usa graph_health para diagnosticar el estado del grafo. Si detectas nodos huerfanos, usa fix_orphans. Si hay proposals stale, usa retry_proposals. Auto-sana lo que puedas, flaggea lo que requiera humano.
 - AUTO-HEALING: Despues de ingest o nomenclar, considera ejecutar graph_health para verificar que el grafo quedo consistente. Si hay violaciones, intenta fix_orphans antes de reportar al humano.
+- VALUE-LEVEL EQUIVALENCE: Para descubrir equivalencias semanticas entre datasets de formato largo (donde el significado esta en los valores, no en los nombres de columnas), usa sample_column_values para extraer valores unicos de una columna, y luego compare_value_sets para que el LLM razone sobre equivalencias entre dos conjuntos de valores. Para casos donde la combinacion de 2+ columnas (ej: Item+Element) equivale a una sola columna en otro dataset, usa compare_composite_values. Despues de descubrir equivalencias, usa persist_equivalences para guardarlas en el grafo como aristas EQUIVALE_A. Este es el unico modo de descubrir equivalencias no obvias que validate_interop no puede detectar.
 """
 
 
 # === STATE ===
 
 class AgentState(TypedDict):
-    messages: Annotated[list, add_messages]
+    messages: list  # plain list of dicts (NOT add_messages — that converts to LangChain objects)
     user_query: str
     scratchpad: list[str]  # historial de thoughts + observations
     current_thought: str
@@ -91,6 +93,7 @@ class AgentState(TypedDict):
     iteration: int
     final_answer: str
     needs_human_input: str  # pregunta al humano si necesita aclaración
+    max_iterations: int  # circuit breaker — limite de iteraciones
 
 
 # === TOOLS ===
@@ -198,7 +201,7 @@ def tool_generate_transform(source_db: str, target_db: str) -> str:
     return "\n".join(lines)
 
 
-def tool_list_concepts() -> str:
+def tool_list_concepts(**kwargs) -> str:
     g = load_graph_cached()
     concepts = g.list_concepts()
     if not concepts:
@@ -352,7 +355,7 @@ def tool_compute_transform(source_db: str, target_db: str) -> str:
     return "\n".join(lines)
 
 
-def tool_audit_graph() -> str:
+def tool_audit_graph(**kwargs) -> str:
     """Audit determinista de invariantes del grafo."""
     g = load_graph_cached()
     result = verify_graph_invariants(g)
@@ -369,7 +372,7 @@ def tool_audit_graph() -> str:
     return "\n".join(lines)
 
 
-def tool_graph_health() -> str:
+def tool_graph_health(**kwargs) -> str:
     """Diagnostico completo del estado del governance-agent."""
     report = check_health()
     return format_health_report(report)
@@ -409,6 +412,312 @@ def tool_retry_proposals(dry_run: bool = True) -> str:
     return "\n".join(lines)
 
 
+def _find_csv_for_source_db(source_db: str) -> Optional[Path]:
+    """Encontrar el archivo CSV correspondiente a un source_db."""
+    search_dirs = [
+        Path(__file__).parent.parent / "datasets" / "real",
+        Path(__file__).parent.parent / "demo",
+        Path(__file__).parent.parent / "tests",
+    ]
+    for d in search_dirs:
+        candidate = d / f"{source_db}.csv"
+        if candidate.exists():
+            return candidate
+    return None
+
+
+def _extract_unique_values(csv_path: Path, column_name: str, max_values: int = 50) -> tuple[list[str], Optional[list[str]]]:
+    """Extraer valores unicos de una columna de un CSV.
+
+    Returns (values, None) on success, ([], headers) if column not found.
+    """
+    with open(csv_path, "r", encoding="utf-8-sig", errors="replace") as f:
+        reader = csv.DictReader(f)
+        headers = reader.fieldnames or []
+        matched_col = column_name
+        if column_name not in headers:
+            col_norm = column_name.lower().replace(" ", "_")
+            for h in headers:
+                if h.lower().replace(" ", "_") == col_norm:
+                    matched_col = h
+                    break
+            if matched_col == column_name:
+                return [], headers
+        unique = set()
+        for row in reader:
+            val = row.get(matched_col, "")
+            if val and val.strip() and val.strip().lower() not in ("", "na", "n/a", "null", "none"):
+                unique.add(val.strip())
+            if len(unique) >= max_values:
+                break
+    return sorted(unique)[:max_values], None
+
+
+def tool_sample_column_values(source_db: str, column_name: str) -> str:
+    """Extraer valores unicos de una columna de un dataset CSV."""
+    csv_path = _find_csv_for_source_db(source_db)
+    if not csv_path:
+        return f"No se encontro CSV para source_db='{source_db}'. Buscado en datasets/real, demo, tests."
+
+    values, err_headers = _extract_unique_values(csv_path, column_name)
+    if err_headers is not None:
+        return f"Columna '{column_name}' no encontrada en {csv_path.name}. Columnas disponibles: {', '.join(err_headers)}"
+
+    lines = [
+        f"Dataset: {source_db} ({csv_path.name})",
+        f"Columna: {column_name}",
+        f"Valores unicos: {len(values)}",
+        "",
+    ]
+    for v in values:
+        lines.append(f"  - {v}")
+    return "\n".join(lines)
+
+
+def tool_compare_value_sets(source_db_a: str, column_a: str, source_db_b: str, column_b: str) -> str:
+    """Comparar dos conjuntos de valores y descubrir equivalencias semanticas via LLM."""
+    csv_a = _find_csv_for_source_db(source_db_a)
+    csv_b = _find_csv_for_source_db(source_db_b)
+    if not csv_a:
+        return f"No se encontro CSV para '{source_db_a}'"
+    if not csv_b:
+        return f"No se encontro CSV para '{source_db_b}'"
+
+    vals_a, err_a = _extract_unique_values(csv_a, column_a)
+    if err_a is not None:
+        return f"Columna '{column_a}' no encontrada en {source_db_a}. Columnas: {', '.join(err_a)}"
+    vals_b, err_b = _extract_unique_values(csv_b, column_b)
+    if err_b is not None:
+        return f"Columna '{column_b}' no encontrada en {source_db_b}. Columnas: {', '.join(err_b)}"
+
+    if not vals_a or not vals_b:
+        return f"Uno o ambos conjuntos de valores estan vacios. A={len(vals_a)}, B={len(vals_b)}"
+
+    values_a_text = "\n".join(f"- {v}" for v in vals_a)
+    values_b_text = "\n".join(f"- {v}" for v in vals_b)
+
+    prompt = (
+        "Eres un experto en interoperabilidad semantica de datos. "
+        "Dados dos conjuntos de valores de dos datasets distintos, encuentra equivalencias semanticas.\n\n"
+        f"DATASET A ({source_db_a}, columna: {column_a}):\n{values_a_text}\n\n"
+        f"DATASET B ({source_db_b}, columna: {column_b}):\n{values_b_text}\n\n"
+        "Identifica:\n"
+        "1. Equivalencias directas (mismo significado, diferente nombre)\n"
+        "2. Equivalencias parciales (uno es subconjunto o superconjunto)\n"
+        "3. Equivalencias compuestas (combinacion de valores de A equivale a un valor de B)\n"
+        "4. Valores sin equivalencia\n\n"
+        'Responde en JSON: {"equivalences": [{"a": "valor_a", "b": "valor_b", '
+        '"type": "directa|parcial|compuesta", "confidence": "alta|media|baja", '
+        '"reason": "explicacion"}], "no_match_a": ["..."], "no_match_b": ["..."]}'
+    )
+
+    try:
+        response = call_groq(
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.2,
+            max_tokens=3000,
+            json_mode=True,
+        )
+        result = json.loads(response)
+        lines = [f"Equivalencias semanticas entre {source_db_a}.{column_a} y {source_db_b}.{column_b}:", ""]
+        for eq in result.get("equivalences", []):
+            icon = {"alta": "OK", "media": "..", "baja": "??"}.get(eq.get("confidence", ""), "??")
+            lines.append(f"  [{icon}] {eq.get('a', '?')} <-> {eq.get('b', '?')} ({eq.get('type', '?')})")
+            lines.append(f"       {eq.get('reason', '')}")
+        if result.get("no_match_a"):
+            lines.append(f"\n  Sin equivalencia en A: {', '.join(result['no_match_a'][:10])}")
+        if result.get("no_match_b"):
+            lines.append(f"  Sin equivalencia en B: {', '.join(result['no_match_b'][:10])}")
+        return "\n".join(lines)
+    except Exception as e:
+        return (
+            f"Error en LLM: {e}\n\n"
+            f"Valores A ({source_db_a}.{column_a}): {', '.join(vals_a[:20])}\n"
+            f"Valores B ({source_db_b}.{column_b}): {', '.join(vals_b[:20])}\n"
+            "Puedes razonar sobre estas equivalencias tu mismo."
+        )
+
+
+def _extract_composite_values(csv_path: Path, column_names: list[str], max_values: int = 50) -> tuple[list[str], Optional[list[str]]]:
+    """Extraer valores compuestos concatenando multiples columnas de un CSV.
+
+    Returns (composite_values, None) on success, ([], headers) if any column not found.
+    """
+    with open(csv_path, "r", encoding="utf-8-sig", errors="replace") as f:
+        reader = csv.DictReader(f)
+        headers = reader.fieldnames or []
+        matched_cols = []
+        for col_name in column_names:
+            matched = col_name
+            if col_name not in headers:
+                col_norm = col_name.lower().replace(" ", "_")
+                for h in headers:
+                    if h.lower().replace(" ", "_") == col_norm:
+                        matched = h
+                        break
+                if matched == col_name:
+                    return [], headers
+            matched_cols.append(matched)
+        unique = set()
+        for row in reader:
+            parts = []
+            for mc in matched_cols:
+                val = row.get(mc, "")
+                if val and val.strip() and val.strip().lower() not in ("", "na", "n/a", "null", "none"):
+                    parts.append(val.strip())
+            if parts:
+                unique.add("|".join(parts))
+            if len(unique) >= max_values:
+                break
+    return sorted(unique)[:max_values], None
+
+
+def tool_compare_composite_values(
+    source_db_a: str, columns_a: str, source_db_b: str, column_b: str
+) -> str:
+    """Comparar valores compuestos (multi-columna) de un dataset vs una columna de otro.
+
+    Usa para formato largo donde la combinacion de 2+ columnas (ej: Item+Element)
+    equivale semanticamente a una sola columna en otro dataset (ej: Indicator Name).
+    """
+    csv_a = _find_csv_for_source_db(source_db_a)
+    csv_b = _find_csv_for_source_db(source_db_b)
+    if not csv_a:
+        return f"No se encontro CSV para '{source_db_a}'"
+    if not csv_b:
+        return f"No se encontro CSV para '{source_db_b}'"
+
+    col_list = [c.strip() for c in columns_a.split(",") if c.strip()]
+    if len(col_list) < 2:
+        return f"columns_a debe tener al menos 2 columnas separadas por coma. Recibido: '{columns_a}'"
+
+    vals_a, err_a = _extract_composite_values(csv_a, col_list)
+    if err_a is not None:
+        return f"Columna no encontrada en {source_db_a}. Columnas disponibles: {', '.join(err_a)}"
+    vals_b, err_b = _extract_unique_values(csv_b, column_b)
+    if err_b is not None:
+        return f"Columna '{column_b}' no encontrada en {source_db_b}. Columnas: {', '.join(err_b)}"
+
+    if not vals_a or not vals_b:
+        return f"Uno o ambos conjuntos de valores estan vacios. A={len(vals_a)}, B={len(vals_b)}"
+
+    values_a_text = "\n".join(f"- {v}" for v in vals_a)
+    values_b_text = "\n".join(f"- {v}" for v in vals_b)
+    cols_a_label = " + ".join(col_list)
+
+    prompt = (
+        "Eres un experto en interoperabilidad semantica de datos. "
+        "Dados dos conjuntos de valores de dos datasets distintos, encuentra equivalencias semanticas.\n\n"
+        f"DATASET A ({source_db_a}, columnas compuestas: {cols_a_label}):\n"
+        "Los valores estan concatenados con '|'. Cada valor es una combinacion de las columnas.\n"
+        f"{values_a_text}\n\n"
+        f"DATASET B ({source_db_b}, columna: {column_b}):\n{values_b_text}\n\n"
+        "Identifica:\n"
+        "1. Equivalencias directas (mismo significado, diferente nombre)\n"
+        "2. Equivalencias parciales (uno es subconjunto o superconjunto)\n"
+        "3. Equivalencias compuestas (combinacion de valores de A equivale a un valor de B)\n"
+        "4. Valores sin equivalencia\n\n"
+        'Responde en JSON: {"equivalences": [{"a": "valor_a", "b": "valor_b", '
+        '"type": "directa|parcial|compuesta", "confidence": "alta|media|baja", '
+        '"reason": "explicacion"}], "no_match_a": ["..."], "no_match_b": ["..."]}'
+    )
+
+    try:
+        response = call_groq(
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.2,
+            max_tokens=3000,
+            json_mode=True,
+        )
+        result = json.loads(response)
+        lines = [f"Equivalencias semanticas entre {source_db_a}.{cols_a_label} y {source_db_b}.{column_b}:", ""]
+        for eq in result.get("equivalences", []):
+            icon = {"alta": "OK", "media": "..", "baja": "??"}.get(eq.get("confidence", ""), "??")
+            lines.append(f"  [{icon}] {eq.get('a', '?')} <-> {eq.get('b', '?')} ({eq.get('type', '?')})")
+            lines.append(f"       {eq.get('reason', '')}")
+        if result.get("no_match_a"):
+            lines.append(f"\n  Sin equivalencia en A: {', '.join(result['no_match_a'][:10])}")
+        if result.get("no_match_b"):
+            lines.append(f"  Sin equivalencia en B: {', '.join(result['no_match_b'][:10])}")
+        return "\n".join(lines)
+    except Exception as e:
+        return (
+            f"Error en LLM: {e}\n\n"
+            f"Valores A ({source_db_a}.{cols_a_label}): {', '.join(vals_a[:20])}\n"
+            f"Valores B ({source_db_b}.{column_b}): {', '.join(vals_b[:20])}\n"
+            "Puedes razonar sobre estas equivalencias tu mismo."
+        )
+
+
+def tool_persist_equivalences(
+    source_db_a: str, column_a: str, source_db_b: str, column_b: str, equivalences_json: str
+) -> str:
+    """Persistir equivalencias descubiertas en el grafo como aristas EQUIVALE_A."""
+    g = load_graph_cached()
+
+    field_a_id = None
+    field_b_id = None
+    for node_id, data in g.graph.nodes(data=True):
+        if data.get("type") == "field":
+            if data.get("source_db") == source_db_a and data.get("column") == column_a:
+                field_a_id = node_id
+            if data.get("source_db") == source_db_b and data.get("column") == column_b:
+                field_b_id = node_id
+
+    if not field_a_id:
+        return f"No se encontro field para {source_db_a}.{column_a} en el grafo. Ingesta el dataset primero."
+    if not field_b_id:
+        return f"No se encontro field para {source_db_b}.{column_b} en el grafo. Ingesta el dataset primero."
+
+    try:
+        equivalences = json.loads(equivalences_json)
+    except json.JSONDecodeError as e:
+        return f"JSON invalido en equivalences_json: {e}"
+
+    eq_list = equivalences if isinstance(equivalences, list) else equivalences.get("equivalences", [])
+    if not eq_list:
+        return "No hay equivalencias para persistir."
+
+    mapping = {}
+    confidence_map = {}
+    for eq in eq_list:
+        a_val = eq.get("a", "")
+        b_val = eq.get("b", "")
+        conf = eq.get("confidence", "baja")
+        if a_val and b_val:
+            mapping[a_val] = b_val
+            confidence_map[a_val] = conf
+
+    g.graph.add_edge(
+        field_a_id, field_b_id,
+        type=EdgeType.EQUIVALE_A.value,
+        mapping=mapping,
+        confidence_map=confidence_map,
+        source="value_level_discovery",
+    )
+    g._db_upsert_edge(
+        field_a_id, field_b_id,
+        EdgeType.EQUIVALE_A.value,
+        {"mapping": mapping, "confidence_map": confidence_map, "source": "value_level_discovery"},
+    )
+
+    from .graph.catalog import _NOMENCLADOR_PATH
+    g.save(str(_NOMENCLADOR_PATH))
+    clear_graph_cache()
+
+    high = sum(1 for c in confidence_map.values() if c == "alta")
+    med = sum(1 for c in confidence_map.values() if c == "media")
+    low = sum(1 for c in confidence_map.values() if c == "baja")
+
+    return (
+        f"Equivalencias persistidas en el grafo: {field_a_id} -> {field_b_id}\n"
+        f"  Total mapeos: {len(mapping)}\n"
+        f"  Alta confianza: {high} | Media: {med} | Baja: {low}\n"
+        f"  Arista EQUIVALE_A creada con source=value_level_discovery.\n"
+        f"  Grafo guardado y cache invalidada."
+    )
+
+
 # === TOOL DISPATCHER ===
 
 TOOLS = {
@@ -427,6 +736,10 @@ TOOLS = {
     "graph_health": tool_graph_health,
     "fix_orphans": tool_fix_orphans,
     "retry_proposals": tool_retry_proposals,
+    "sample_column_values": tool_sample_column_values,
+    "compare_value_sets": tool_compare_value_sets,
+    "compare_composite_values": tool_compare_composite_values,
+    "persist_equivalences": tool_persist_equivalences,
 }
 
 TOOLS_SCHEMA = {
@@ -446,6 +759,10 @@ TOOLS_SCHEMA = {
     "graph_health": {},
     "fix_orphans": {"dry_run": "bool"},
     "retry_proposals": {"dry_run": "bool"},
+    "sample_column_values": {"source_db": "str", "column_name": "str"},
+    "compare_value_sets": {"source_db_a": "str", "column_a": "str", "source_db_b": "str", "column_b": "str"},
+    "compare_composite_values": {"source_db_a": "str", "columns_a": "str", "source_db_b": "str", "column_b": "str"},
+    "persist_equivalences": {"source_db_a": "str", "column_a": "str", "source_db_b": "str", "column_b": "str", "equivalences_json": "str"},
 }
 
 # Descripciones de tools para el schema OpenAI
@@ -466,6 +783,10 @@ _TOOL_DESCRIPTIONS = {
     "graph_health": "Diagnostico completo del estado del governance-agent: connectivity, cobertura, calidad, nodos huerfanos, proposals stale.",
     "fix_orphans": "Auto-healing de nodos huerfanos. Busca conceptos similares y linkea fields sin concepto. dry_run=true solo sugiere.",
     "retry_proposals": "Auto-healing de nodos proposed stale. Auto-aprueba alta calidad (>=0.7) con 7+ dias, flaggea baja calidad.",
+    "sample_column_values": "Extrae valores unicos de una columna de un dataset CSV. Usa para inspeccionar el contenido de columnas en formato largo donde el significado semantico esta en los valores.",
+    "compare_value_sets": "Compara dos conjuntos de valores de dos datasets y descubre equivalencias semanticas via LLM. Usa para encontrar equivalencias no obvias entre columnas de formato largo que validate_interop no puede detectar.",
+    "compare_composite_values": "Compara valores compuestos (2+ columnas concatenadas con coma) de un dataset vs una columna de otro. Usa para formato largo donde Item+Element equivale a Indicator Name.",
+    "persist_equivalences": "Persiste equivalencias descubiertas en el grafo como aristas EQUIVALE_A entre fields. Acepta JSON de equivalencias de compare_value_sets o compare_composite_values. Requiere que ambos datasets esten ingestados en el grafo.",
 }
 
 # Mapeo de tipos Python a tipos OpenAI
@@ -514,18 +835,52 @@ OPENAI_TOOLS_SCHEMA = _build_openai_tools_schema()
 # === NODES (native tool calling) ===
 
 def think_node(state: AgentState) -> AgentState:
-    """El LLM razona y decide qué tool usar (o responder directamente) via function calling nativo."""
-    scratchpad_text = "\n".join(state.get("scratchpad", []))
+    """El LLM razona y decide qué tool usar (o responder directamente) via function calling nativo.
+
+    Context engineering: en lugar de enviar todo el historial (scratchpad + mensajes),
+    se envian solo los ultimos 3 turnos con detalle completo y los turnos anteriores
+    como resumen condensado. Esto reduce el consumo de tokens y mejora la calidad del
+    razonamiento en iteraciones tardias.
+    """
+    scratchpad = state.get("scratchpad", [])
+    all_messages = state.get("messages", [])
+
+    RECENT_TURNS = 3
+    RECENT_MSG_COUNT = RECENT_TURNS * 2  # assistant + tool por turno
+
+    # Dividir: turnos recientes (detalle) vs antiguos (resumen)
+    if len(all_messages) > RECENT_MSG_COUNT:
+        recent_messages = all_messages[-RECENT_MSG_COUNT:]
+        old_scratchpad = scratchpad[:-RECENT_TURNS] if len(scratchpad) > RECENT_TURNS else []
+    else:
+        recent_messages = all_messages
+        old_scratchpad = []
+
+    # Resumen condensado de turnos antiguos (solo nombres de tools usados)
+    summary_text = ""
+    if old_scratchpad:
+        summary_lines = []
+        for entry in old_scratchpad:
+            for line in entry.split("\n"):
+                if line.startswith("ACTION:"):
+                    summary_lines.append(f"  - {line[7:].strip()}")
+        summary_text = f"\n\nAcciones anteriores (resumen):\n" + "\n".join(summary_lines) + "\n"
 
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT},
-        {"role": "user", "content": f"Pregunta del usuario: {state['user_query']}\n\nHistorial de acciones:\n{scratchpad_text}\n\n¿Qué haces ahora?"},
+        {"role": "user", "content": f"Pregunta del usuario: {state['user_query']}{summary_text}\n\n¿Qué haces ahora?"},
     ]
 
-    # Si hay resultados de tools previos, incluirlos como mensajes tool
-    tool_messages = state.get("messages", [])
-    if tool_messages:
-        messages.extend(tool_messages)
+    # Solo incluir mensajes de los ultimos 3 turnos (detalle completo)
+    for msg in recent_messages:
+        if isinstance(msg, dict):
+            messages.append(msg)
+        elif hasattr(msg, "model_dump"):
+            messages.append(msg.model_dump())
+        elif hasattr(msg, "dict"):
+            messages.append(msg.dict())
+        else:
+            messages.append({"role": "assistant", "content": str(msg)})
 
     try:
         result = call_groq_with_tools(
@@ -570,12 +925,22 @@ def think_node(state: AgentState) -> AgentState:
     except json.JSONDecodeError:
         tool_args = {"query": tool_args_raw} if tool_args_raw else {}
 
+    # Guardar mensaje assistant con tool_calls para que el mensaje tool tenga contexto
+    assistant_msg = {
+        "role": "assistant",
+        "content": content,
+        "tool_calls": tool_calls,
+    }
+    messages = state.get("messages", [])
+    messages.append(assistant_msg)
+
     return {
         **state,
         "current_thought": content,
         "current_action": tool_name,
         "current_action_input": json.dumps(tool_args),
         "tool_call_id": tool_call_id,
+        "messages": messages,
         "iteration": state.get("iteration", 0) + 1,
     }
 
@@ -628,19 +993,41 @@ def act_node(state: AgentState) -> AgentState:
 
 
 def observe_node(state: AgentState) -> AgentState:
-    """Registra la observación en el scratchpad."""
+    """Registra la observación en el scratchpad y activa circuit breaker si es necesario."""
     thought = state.get("current_thought", "")
     action = state.get("current_action", "")
     result = state.get("tool_result", "")
-    
+
     entry = f"THOUGHT: {thought}\nACTION: {action}\nOBSERVATION: {result[:500]}"
-    
+
     scratchpad = state.get("scratchpad", [])
     scratchpad.append(entry)
-    
+
+    # Circuit breaker: si se alcanzo el limite, generar respuesta parcial
+    iteration = state.get("iteration", 0)
+    max_iter = state.get("max_iterations", 8)
+    final_answer = state.get("final_answer", "")
+
+    if iteration >= max_iter and not final_answer:
+        tools_used = []
+        for e in scratchpad:
+            for line in e.split("\n"):
+                if line.startswith("ACTION:"):
+                    tool_name = line[7:].strip()
+                    if tool_name:
+                        tools_used.append(tool_name)
+        final_answer = (
+            f"Alcance el limite de {max_iter} iteraciones sin llegar a una respuesta final. "
+            f"Tools usadas: {', '.join(tools_used)}. "
+            f"Ultima observacion: {result[:300]}. "
+            f"Reformula la consulta o continua manualmente con las tools del CLI."
+        )
+        logger.warning("observe_node: circuit breaker activado en iteracion %d", iteration)
+
     return {
         **state,
         "scratchpad": scratchpad,
+        "final_answer": final_answer,
     }
 
 
@@ -663,7 +1050,7 @@ def should_continue(state: AgentState) -> str:
         return "end"
     if state.get("needs_human_input"):
         return "end"
-    if state.get("iteration", 0) >= 8:
+    if state.get("iteration", 0) >= state.get("max_iterations", 8):
         return "end"
     if not state.get("current_action"):
         return "end"
@@ -730,6 +1117,7 @@ def run_agent(query: str, max_iterations: int = 8) -> dict:
         iteration=0,
         final_answer="",
         needs_human_input="",
+        max_iterations=max_iterations,
     )
     
     result = app.invoke(initial_state, {"recursion_limit": max_iterations * 3})
@@ -766,3 +1154,46 @@ def run_agent(query: str, max_iterations: int = 8) -> dict:
         "tools_used": tools_used,
         "health_verified": health_verified,
     }
+
+
+# === Compatibilidad para moa_agent.py (patron ReAct texto) ===
+
+def _load_graph() -> NomencladorGraph:
+    """Alias para load_graph_cached (compatibilidad moa_agent)."""
+    return load_graph_cached()
+
+
+def _clear_graph_cache() -> None:
+    """Alias para clear_graph_cache (compatibilidad moa_agent)."""
+    clear_graph_cache()
+
+
+def _parse_response(text: str) -> dict:
+    """Parsear respuesta ReAct en formato texto (Thought/Action/Action Input/Final).
+
+    Usado por moa_agent.py que aun usa el patron ReAct textual.
+    """
+    result = {"thought": "", "action": "", "action_input": "", "final": ""}
+
+    # Final Answer
+    final_match = re.search(r"Final Answer:\s*(.*?)(?:\n[A-Z]|\Z)", text, re.DOTALL)
+    if final_match:
+        result["final"] = final_match.group(1).strip()
+        return result
+
+    # Thought
+    thought_match = re.search(r"Thought:\s*(.*?)(?:\nAction:|\Z)", text, re.DOTALL)
+    if thought_match:
+        result["thought"] = thought_match.group(1).strip()
+
+    # Action
+    action_match = re.search(r"Action:\s*(.*?)(?:\nAction Input:|\Z)", text, re.DOTALL)
+    if action_match:
+        result["action"] = action_match.group(1).strip()
+
+    # Action Input
+    input_match = re.search(r"Action Input:\s*(.*?)(?:\nObservation:|\nThought:|\Z)", text, re.DOTALL)
+    if input_match:
+        result["action_input"] = input_match.group(1).strip()
+
+    return result
