@@ -48,6 +48,15 @@ from .verifier import (
 )
 from .health import check_health, fix_orphan_nodes, retry_stuck_proposals, format_health_report
 
+from semantic_tools.similarity import (
+    cosine_similarity as st_cosine,
+    jaccard_similarity as st_jaccard,
+    overlap_coefficient as st_overlap,
+    tfidf_similarity as st_tfidf,
+    tfidf_similarity_batch as st_tfidf_batch,
+    composite_similarity as st_composite,
+)
+
 logger = logging.getLogger(__name__)
 
 NOMENCLADOR_PATH = Path(__file__).parent.parent / "nomenclador" / "nomenclador.json"
@@ -76,6 +85,7 @@ REGLAS:
 - SELF-MONITORING: Usa graph_health para diagnosticar el estado del grafo. Si detectas nodos huerfanos, usa fix_orphans. Si hay proposals stale, usa retry_proposals. Auto-sana lo que puedas, flaggea lo que requiera humano.
 - AUTO-HEALING: Despues de ingest o nomenclar, considera ejecutar graph_health para verificar que el grafo quedo consistente. Si hay violaciones, intenta fix_orphans antes de reportar al humano.
 - VALUE-LEVEL EQUIVALENCE: Para descubrir equivalencias semanticas entre datasets de formato largo (donde el significado esta en los valores, no en los nombres de columnas), usa sample_column_values para extraer valores unicos de una columna, y luego compare_value_sets para que el LLM razone sobre equivalencias entre dos conjuntos de valores. Para casos donde la combinacion de 2+ columnas (ej: Item+Element) equivale a una sola columna en otro dataset, usa compare_composite_values. Despues de descubrir equivalencias, usa persist_equivalences para guardarlas en el grafo como aristas EQUIVALE_A. Este es el unico modo de descubrir equivalencias no obvias que validate_interop no puede detectar.
+- DETERMINISTIC SIMILARITY: Usa semantic_similarity para comparar dos columnas cuantitativamente (cosine, jaccard, overlap) sin gastar tokens de LLM. Usa text_similarity para comparar definiciones de conceptos via TF-IDF. Usa composite_similarity para combinar ambos (valores + texto) en un solo score. Estas tools son deterministas y gratuitas — usalas como pre-filtro antes de compare_value_sets (LLM) para descartar pares obvios.
 """
 
 
@@ -718,6 +728,138 @@ def tool_persist_equivalences(
     )
 
 
+def tool_semantic_similarity(source_db_a: str, column_a: str, source_db_b: str, column_b: str) -> str:
+    """Similitud determinista entre dos columnas (cosine, jaccard, overlap). Sin LLM."""
+    csv_a = _find_csv_for_source_db(source_db_a)
+    csv_b = _find_csv_for_source_db(source_db_b)
+    if not csv_a:
+        return f"No se encontro CSV para '{source_db_a}'"
+    if not csv_b:
+        return f"No se encontro CSV para '{source_db_b}'"
+
+    vals_a, err_a = _extract_unique_values(csv_a, column_a)
+    if err_a is not None:
+        return f"Columna '{column_a}' no encontrada en {source_db_a}. Columnas: {', '.join(err_a)}"
+    vals_b, err_b = _extract_unique_values(csv_b, column_b)
+    if err_b is not None:
+        return f"Columna '{column_b}' no encontrada en {source_db_b}. Columnas: {', '.join(err_b)}"
+
+    if not vals_a or not vals_b:
+        return f"Conjuntos vacios. A={len(vals_a)}, B={len(vals_b)}"
+
+    cos = st_cosine(vals_a, vals_b)
+    jac = st_jaccard(vals_a, vals_b)
+    ovl = st_overlap(vals_a, vals_b)
+
+    verdict = "alto" if cos >= 0.7 else ("medio" if cos >= 0.4 else "bajo")
+
+    lines = [
+        f"Similitud determinista: {source_db_a}.{column_a} vs {source_db_b}.{column_b}",
+        f"  Valores A: {len(vals_a)} | Valores B: {len(vals_b)}",
+        f"  Cosine: {cos:.4f} (distribucion)",
+        f"  Jaccard: {jac:.4f} (overlap de conjuntos)",
+        f"  Overlap coeff: {ovl:.4f} (subconjunto)",
+        f"  Verdict: {verdict}",
+    ]
+    if cos >= 0.7:
+        lines.append("  => Alta similitud. Probablemente equivalentes.")
+    elif cos >= 0.4:
+        lines.append("  => Similitud media. Revisar con compare_value_sets o LLM.")
+    else:
+        lines.append("  => Baja similitud. Probablemente no equivalentes.")
+    return "\n".join(lines)
+
+
+def tool_text_similarity(concept_a: str, concept_b: str) -> str:
+    """Similitud TF-IDF entre definiciones de dos conceptos. Sin LLM."""
+    g = load_graph_cached()
+    c_a = g.find_concept(concept_a)
+    c_b = g.find_concept(concept_b)
+    if not c_a:
+        return f"Concepto '{concept_a}' no encontrado."
+    if not c_b:
+        return f"Concepto '{concept_b}' no encontrado."
+
+    text_a = c_a.get("definition", "") or c_a.get("name", "")
+    text_b = c_b.get("definition", "") or c_b.get("name", "")
+
+    if not text_a or not text_b:
+        return f"Definiciones vacias. A='{text_a[:50]}', B='{text_b[:50]}'"
+
+    score = st_tfidf(text_a, text_b)
+    verdict = "alto" if score >= 0.6 else ("medio" if score >= 0.3 else "bajo")
+
+    lines = [
+        f"Similitud TF-IDF: '{c_a.get('name', concept_a)}' vs '{c_b.get('name', concept_b)}'",
+        f"  Score: {score:.4f}",
+        f"  Verdict: {verdict}",
+    ]
+    if score >= 0.6:
+        lines.append("  => Definiciones muy similares. Probablemente el mismo concepto.")
+    elif score >= 0.3:
+        lines.append("  => Similitud parcial. Podrian estar relacionados.")
+    else:
+        lines.append("  => Definiciones distintas. Probablemente conceptos diferentes.")
+    return "\n".join(lines)
+
+
+def tool_composite_similarity(source_db_a: str, column_a: str, source_db_b: str, column_b: str) -> str:
+    """Similitud compuesta (valores + definiciones) entre dos campos. Sin LLM."""
+    csv_a = _find_csv_for_source_db(source_db_a)
+    csv_b = _find_csv_for_source_db(source_db_b)
+    if not csv_a:
+        return f"No se encontro CSV para '{source_db_a}'"
+    if not csv_b:
+        return f"No se encontro CSV para '{source_db_b}'"
+
+    vals_a, err_a = _extract_unique_values(csv_a, column_a)
+    if err_a is not None:
+        return f"Columna '{column_a}' no encontrada en {source_db_a}. Columnas: {', '.join(err_a)}"
+    vals_b, err_b = _extract_unique_values(csv_b, column_b)
+    if err_b is not None:
+        return f"Columna '{column_b}' no encontrada en {source_db_b}. Columnas: {', '.join(err_b)}"
+
+    g = load_graph_cached()
+    text_a = ""
+    text_b = ""
+    for node_id, data in g.graph.nodes(data=True):
+        if data.get("type") == "field":
+            if data.get("source_db") == source_db_a and data.get("column") == column_a:
+                for succ in g.graph.successors(node_id):
+                    edge = g.graph.get_edge_data(node_id, succ)
+                    if edge and edge.get("type") == "implementa":
+                        concept = g.graph.nodes.get(succ, {})
+                        text_a = concept.get("definition", "") or concept.get("name", "")
+            if data.get("source_db") == source_db_b and data.get("column") == column_b:
+                for succ in g.graph.successors(node_id):
+                    edge = g.graph.get_edge_data(node_id, succ)
+                    if edge and edge.get("type") == "implementa":
+                        concept = g.graph.nodes.get(succ, {})
+                        text_b = concept.get("definition", "") or concept.get("name", "")
+
+    result = st_composite(
+        values_a=vals_a,
+        values_b=vals_b,
+        text_a=text_a,
+        text_b=text_b,
+    )
+
+    lines = [
+        f"Similitud compuesta: {source_db_a}.{column_a} vs {source_db_b}.{column_b}",
+        f"  Cosine: {result['cosine']:.4f}",
+        f"  Jaccard: {result['jaccard']:.4f}",
+        f"  Overlap: {result['overlap']:.4f}",
+        f"  TF-IDF: {result['tfidf']:.4f}" + (" (sin definicion disponible)" if result['tfidf'] == 0.0 else ""),
+        f"  Composite: {result['composite']:.4f}",
+        f"  Verdict: {result['verdict']}",
+    ]
+    if result['verdict'] in ('high', 'medium'):
+        lines.append(f"  => Confirmar con compare_value_sets (LLM) para equivalencias a nivel de valor.")
+    else:
+        lines.append(f"  => Baja similitud. Probablemente no equivalentes.")
+    return "\n".join(lines)
+
+
 # === TOOL DISPATCHER ===
 
 TOOLS = {
@@ -740,6 +882,9 @@ TOOLS = {
     "compare_value_sets": tool_compare_value_sets,
     "compare_composite_values": tool_compare_composite_values,
     "persist_equivalences": tool_persist_equivalences,
+    "semantic_similarity": tool_semantic_similarity,
+    "text_similarity": tool_text_similarity,
+    "composite_similarity": tool_composite_similarity,
 }
 
 TOOLS_SCHEMA = {
@@ -763,6 +908,9 @@ TOOLS_SCHEMA = {
     "compare_value_sets": {"source_db_a": "str", "column_a": "str", "source_db_b": "str", "column_b": "str"},
     "compare_composite_values": {"source_db_a": "str", "columns_a": "str", "source_db_b": "str", "column_b": "str"},
     "persist_equivalences": {"source_db_a": "str", "column_a": "str", "source_db_b": "str", "column_b": "str", "equivalences_json": "str"},
+    "semantic_similarity": {"source_db_a": "str", "column_a": "str", "source_db_b": "str", "column_b": "str"},
+    "text_similarity": {"concept_a": "str", "concept_b": "str"},
+    "composite_similarity": {"source_db_a": "str", "column_a": "str", "source_db_b": "str", "column_b": "str"},
 }
 
 # Descripciones de tools para el schema OpenAI
@@ -787,6 +935,9 @@ _TOOL_DESCRIPTIONS = {
     "compare_value_sets": "Compara dos conjuntos de valores de dos datasets y descubre equivalencias semanticas via LLM. Usa para encontrar equivalencias no obvias entre columnas de formato largo que validate_interop no puede detectar.",
     "compare_composite_values": "Compara valores compuestos (2+ columnas concatenadas con coma) de un dataset vs una columna de otro. Usa para formato largo donde Item+Element equivale a Indicator Name.",
     "persist_equivalences": "Persiste equivalencias descubiertas en el grafo como aristas EQUIVALE_A entre fields. Acepta JSON de equivalencias de compare_value_sets o compare_composite_values. Requiere que ambos datasets esten ingestados en el grafo.",
+    "semantic_similarity": "Compara dos columnas cuantitativamente (cosine, jaccard, overlap) sin LLM. Determinista y gratuito. Usa como pre-filtro antes de compare_value_sets.",
+    "text_similarity": "Compara definiciones de dos conceptos via TF-IDF sin LLM. Determinista. Usa para verificar si dos conceptos son el mismo.",
+    "composite_similarity": "Combina similitud de valores (cosine, jaccard, overlap) + similitud de texto (TF-IDF) en un solo score. Sin LLM. Usa para evaluacion completa de equivalencia.",
 }
 
 # Mapeo de tipos Python a tipos OpenAI

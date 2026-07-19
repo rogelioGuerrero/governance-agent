@@ -532,8 +532,9 @@ def run_moa(query: str, max_iterations: int = 5) -> dict:
             for name, (prompt, tools) in agents.items()
         }
 
-        for future in as_completed(futures):
-            name_str = {f: n for n, f in futures.items()}[future]
+        future_to_name = {f: n for n, f in futures.items()}
+        for future in as_completed(future_to_name.keys()):
+            name_str = future_to_name[future]
             try:
                 output = future.result()
                 results[name_str] = output

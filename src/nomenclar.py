@@ -386,11 +386,11 @@ def complete(report: DiscoveryReport, auto_confirm: bool = False) -> CompletionR
             definition = gap["inference_reason"]
             confidence = "high"
 
+        # Gap A: auto-detectar PII/sensible
+        data_cls = _detect_data_classification(concept_name, gap['data_type'], gap['sample_values'])
+
         # Crear concepto si no existe
         if concept_id not in g.graph:
-            # Gap A: auto-detectar PII/sensible
-            data_cls = _detect_data_classification(concept_name, gap['data_type'], gap['sample_values'])
-
             g.add_concept(ConceptNode(
                 id=concept_id,
                 name=concept_name,
