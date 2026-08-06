@@ -1,7 +1,7 @@
 """
 Cliente Groq para el agente de governance.
 
-Usa la API key separada del proyecto (no la de BienCuidar).
+Usa la API key configurada en .env.
 Modelos: gpt-oss-120b (primario) + gpt-oss-20b (fallback).
 """
 

@@ -16,7 +16,7 @@ Archivo: `~/.codeium/windsurf/mcp_config.json`
     "nomenclador": {
       "command": "uv",
       "args": ["run", "python", "-m", "src.mcp_server"],
-      "cwd": "D:\\proyectoBolt\\governance-agent"
+      "cwd": "/ruta/a/governance-agent"
     }
   }
 }
@@ -32,7 +32,7 @@ Archivo: `~/.cursor/mcp.json`
     "nomenclador": {
       "command": "uv",
       "args": ["run", "python", "-m", "src.mcp_server"],
-      "cwd": "D:\\proyectoBolt\\governance-agent"
+      "cwd": "/ruta/a/governance-agent"
     }
   }
 }
@@ -49,7 +49,7 @@ Archivo: `.vscode/mcp.json` en el workspace
       "type": "stdio",
       "command": "uv",
       "args": ["run", "python", "-m", "src.mcp_server"],
-      "cwd": "D:\\proyectoBolt\\governance-agent",
+      "cwd": "/ruta/a/governance-agent",
       "env": {}
     }
   }

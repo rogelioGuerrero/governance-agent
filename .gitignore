@@ -34,6 +34,18 @@ docs/reportes/
 
 # Internal / commercial docs
 docs/posicionamiento_producto.md
+EVALUACION_METODOLOGIA.md
+EVALUACION_RONDA_2.md
+demo/REPORTE_EJECUTIVO.md
+
+# Scripts with hardcoded local paths (internal use only)
+scripts/check_edges.py
+scripts/gen_ministerio_csv.py
+scripts/download_real_data.py
+scripts/rebuild_real_graph.py
+scripts/build_combined_graph.py
+scripts/build_health_graph.py
+scripts/discover_equivalences.py
 
 # Exploration / scratch files
 articulo_governance_demo.md
@@ -52,3 +64,4 @@ AGENTS.md
 # Test artifacts
 .pytest_cache/
 tests/eval_results.json
+tests/test_mcp_client.py

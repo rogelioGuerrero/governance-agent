@@ -120,7 +120,7 @@ El framework está diseñado para ser flexible: cada gobierno tiene sistemas dis
 - UI web para planificadores no técnicos
 - Dashboard de calidad de datos por dominio
 
-*Algunas de estas funcionalidades podrían ofrecerse como extensiones o servicios complementarios.*
+*Estas funcionalidades están en desarrollo y se incorporarán en futuras versiones.*
 
 ---
 
