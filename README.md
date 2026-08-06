@@ -322,6 +322,17 @@ Las contribuciones son bienvenidas. Ver [CONTRIBUTING.md](CONTRIBUTING.md) para 
 
 ---
 
+## Autores
+
+**AGTI SA de CV** — El Salvador
+
+Governance Agent es desarrollado y mantenido por AGTI SA de CV como contribución al ecosistema de código abierto para la gestión pública en América Latina y el Caribe.
+
+- **Repositorio**: [https://github.com/rogelioGuerrero/governance-agent](https://github.com/rogelioGuerrero/governance-agent)
+- **Contacto**: [info@agtisa.com](mailto:info@agtisa.com)
+
+---
+
 ## Licencia
 
 [Apache License 2.0](LICENSE) — permite uso comercial, modificación y distribución con atribución.
