@@ -32,6 +32,9 @@ reports/
 docs/reportes/
 *.log
 
+# Internal / commercial docs
+docs/posicionamiento_producto.md
+
 # Exploration / scratch files
 articulo_governance_demo.md
 deep_dive_real.md

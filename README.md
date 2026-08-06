@@ -305,7 +305,7 @@ Una alcaldía consolida datos de catastro, registro civil y servicios públicos 
 - [ ] UI web para planificadores no técnicos
 - [ ] Dashboard de calidad de datos por dominio
 
-*Algunas de estas funcionalidades podrían ofrecerse como extensiones o servicios complementarios.*
+*Estas funcionalidades están en desarrollo y se incorporarán en futuras versiones.*
 
 ---
 
@@ -341,7 +341,7 @@ Governance Agent es desarrollado y mantenido por AGTI SA de CV como contribució
 
 ## Contacto
 
-Para implementación, consultoría o colaboración:
+Para colaboración, adaptación o reportar problemas:
 
 - **GitHub Issues**: [https://github.com/rogelioGuerrero/governance-agent/issues](https://github.com/rogelioGuerrero/governance-agent/issues)
 - **Email**: [info@agtisa.com]
