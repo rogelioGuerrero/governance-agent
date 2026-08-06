@@ -1,0 +1,61 @@
+# VRP Domain Pack
+# Auto-generado 80% desde vrp_solver/models.py (Pydantic)
+# 20% manual: reglas semánticas, mapeos, validadores custom
+
+name: vrp
+version: "1.0.0"
+description: "Vehicle Routing Problem - optimización de rutas con OR-Tools"
+
+# El schema se auto-genera desde Pydantic via:
+#   PackLoader.from_pydantic("vrp_solver.models", "OptimizeRequest", pack_name="vrp")
+# Aquí solo se definen las partes manuales (20%)
+
+semantic_rules:
+  - "time_window_end debe ser posterior a time_window_start en todas las ubicaciones"
+  - "ventanas horarias fuera de 06:00-22:00 (21600s-79200s) son atípicas para visitas de servicio"
+  - "coordenadas deben estar dentro del área de operación geográfica"
+  - "un cliente no puede tener dos visitas asignadas el mismo día con el mismo tipo"
+  - "weight_demand negativo significa entrega, positivo significa recogida"
+  - "volume_demand negativo significa entrega, positivo significa recogida"
+  - "start_time del vehículo debe ser <= que el time_window_start más temprano de sus visitas"
+  - "end_time del vehículo debe ser >= que el time_window_end más tardío de sus visitas"
+  - "si allow_skipping_nodes es false, la demanda total no debe exceder la capacidad total"
+  - "cada par pickup-delivery debe tener demandas opuestas (suma cero)"
+  - "skills del vehículo deben ser superconjunto de required_skills de la ubicación"
+  - "coordenadas duplicadas pueden indicar el mismo cliente ingresado dos veces"
+
+inference_mappings:
+  lat: ["latitude", "latitud", "y", "coord_y", "coord_y"]
+  lng: ["longitude", "longitud", "x", "coord_x", "coord_x"]
+  coords: ["coordenadas", "coordinates", "xy", "point"]
+  weight_demand: ["peso", "weight", "demanda_peso", "cargo_weight"]
+  volume_demand: ["volumen", "volume", "demanda_volumen", "cargo_volume"]
+  service_time: ["tiempo_servicio", "service", "duration", "duracion"]
+  time_window_start: ["tw_start", "ventana_inicio", "start_time_window", "earliest"]
+  time_window_end: ["tw_end", "ventana_fin", "end_time_window", "latest"]
+  required_skills: ["skills", "habilidades", "competencias", "certificaciones"]
+  weight_capacity: ["capacidad_peso", "max_weight", "payload"]
+  volume_capacity: ["capacidad_volumen", "max_volume", "cargo_capacity"]
+  start_location_id: ["start_location", "origen", "depot_start"]
+  end_location_id: ["end_location", "destino", "depot_end"]
+
+custom_validators:
+  - "domain_packs.vrp.vrp_validators:check_coords_in_bounds"
+  - "domain_packs.vrp.vrp_validators:check_time_window_overlap"
+  - "domain_packs.vrp.vrp_validators:check_pickup_delivery_balance"
+
+solver_contract:
+  pydantic_module: "vrp_solver.models"
+  pydantic_class: "OptimizeRequest"
+
+metadata:
+  solver_api_url: "http://localhost:8000/optimize"
+  area_of_operation:
+    # Bogotá approximate bounds (configurable)
+    lat_min: 4.47
+    lat_max: 4.83
+    lng_min: -74.25
+    lng_max: -74.00
+  typical_service_hours:
+    start: 21600  # 06:00
+    end: 79200    # 22:00

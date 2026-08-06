@@ -16,6 +16,11 @@ import json
 import logging
 from pathlib import Path
 
+# Forzar UTF-8 en Windows para evitar UnicodeEncodeError con caracteres del LLM
+if sys.platform == "win32":
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 from dotenv import load_dotenv
 load_dotenv()
 
@@ -35,9 +40,14 @@ from .guardrails import validate_interoperability, CheckpointStatus
 from .transformer import generate_transformation, artifact_to_dict
 from .rag_factory import create_ingestion_plan, execute_ingestion_plan, plan_to_dict
 from .rag_factory import detect_issues, clean_column_name, RawColumn
+from .rag_factory import _compute_quality_metrics
 from .inference import infer_semantic_type
-from .graph.catalog import clear_graph_cache
+from .graph.catalog import clear_graph_cache, load_graph_cached
 from .health import check_health, fix_orphan_nodes, retry_stuck_proposals, format_health_report, log_health_run
+from .policy import analyze_policy_problem
+from .discover import discover, generate_insights_for_source, deep_dive
+from .rapid_assessment import assess_csv, format_report_markdown, format_report_plain
+from .enriched_analysis import run_enriched_analysis, format_enriched_report_markdown, format_enriched_report_plain
 
 logger = logging.getLogger(__name__)
 console = Console()
@@ -45,10 +55,7 @@ NOMENCLADOR_PATH = Path(__file__).parent.parent / "nomenclador" / "nomenclador.j
 
 
 def load_graph() -> NomencladorGraph:
-    g = NomencladorGraph()
-    if NOMENCLADOR_PATH.exists():
-        g.load(str(NOMENCLADOR_PATH))
-    return g
+    return load_graph_cached()
 
 
 def save_graph(g: NomencladorGraph):
@@ -250,6 +257,13 @@ def _register_field_with_concept(g: NomencladorGraph, col, source_id: str, sourc
     # Registrar campo fisico
     ctx = _infer_context(source_name)
     field_id = f"field:{source_name}.{col.column}"
+    qm = _compute_quality_metrics({
+        "total_count": col.total_count,
+        "null_count": col.null_count,
+        "unique_count": col.unique_count,
+        "sample_values": col.sample_values,
+        "data_type": col.data_type,
+    }, {"standard": standard_id})
     g.add_field(FieldNode(
         id=field_id,
         source_db=source_name,
@@ -266,6 +280,11 @@ def _register_field_with_concept(g: NomencladorGraph, col, source_id: str, sourc
         population=ctx["population"],
         capture_method=ctx["capture_method"],
         context_label=ctx["context_label"],
+        completeness=qm["completeness"],
+        uniqueness=qm["uniqueness"],
+        consistency=qm["consistency"],
+        validity=qm["validity"],
+        quality_score=qm["quality_score"],
     ))
     g.link_implementa(field_id, concept_id)
     g.link_fuente(field_id, source_id)
@@ -275,6 +294,13 @@ def _auto_register_no_concept(g: NomencladorGraph, col, source_id: str, source_n
     """Registro automatico sin concepto canonico (para modo --auto)."""
     ctx = _infer_context(source_name)
     field_id = f"field:{source_name}.{col.column}"
+    qm = _compute_quality_metrics({
+        "total_count": col.total_count,
+        "null_count": col.null_count,
+        "unique_count": col.unique_count,
+        "sample_values": col.sample_values,
+        "data_type": col.data_type,
+    }, {"standard": ""})
     g.add_field(FieldNode(
         id=field_id,
         source_db=source_name,
@@ -289,6 +315,11 @@ def _auto_register_no_concept(g: NomencladorGraph, col, source_id: str, source_n
         population=ctx["population"],
         capture_method=ctx["capture_method"],
         context_label=ctx["context_label"],
+        completeness=qm["completeness"],
+        uniqueness=qm["uniqueness"],
+        consistency=qm["consistency"],
+        validity=qm["validity"],
+        quality_score=qm["quality_score"],
     ))
     g.link_fuente(field_id, source_id)
 
@@ -317,6 +348,13 @@ def _manual_register(g: NomencladorGraph, col, source_id: str, source_name: str)
 
     # Registrar campo físico
     field_id = f"field:{source_name}.{col.column}"
+    qm = _compute_quality_metrics({
+        "total_count": col.total_count,
+        "null_count": col.null_count,
+        "unique_count": col.unique_count,
+        "sample_values": col.sample_values,
+        "data_type": col.data_type,
+    }, {"standard": ""})
     g.add_field(FieldNode(
         id=field_id,
         source_db=source_name,
@@ -328,6 +366,11 @@ def _manual_register(g: NomencladorGraph, col, source_id: str, source_name: str)
         null_count=col.null_count,
         total_count=col.total_count,
         sample_values=col.sample_values,
+        completeness=qm["completeness"],
+        uniqueness=qm["uniqueness"],
+        consistency=qm["consistency"],
+        validity=qm["validity"],
+        quality_score=qm["quality_score"],
     ))
     g.link_implementa(field_id, concept_id)
     g.link_fuente(field_id, source_id)
@@ -415,10 +458,16 @@ def cmd_interop(db1: str, db2: str):
     for i, result in enumerate(results, 1):
         field_a = result["field_a"]
         field_b = result["field_b"]
-        concept = result["concept"]
+        concept = result.get("concept")
         classifier = result.get("classifier")
+        match_type = result.get("match_type", "shared_concept")
+        confidence = result.get("confidence")
 
-        console.print(f"[bold cyan]Camino {i}: {concept.get('name', '?')}[/bold cyan]")
+        concept_name = concept.get("name", "?") if concept else "?"
+        label = f"Camino {i}: {concept_name}"
+        if match_type == "value_equivalence":
+            label += f" [EQUIVALE_A conf={confidence}]"
+        console.print(f"[bold cyan]{label}[/bold cyan]")
         console.print(f"  {field_a.get('source_db', '')}.{field_a.get('column', '')} <-> {field_b.get('source_db', '')}.{field_b.get('column', '')}")
 
         # === GUARDRAILS ===
@@ -1505,6 +1554,716 @@ def cmd_health(do_fix: bool = False, do_retry: bool = False, do_heartbeat: bool 
             console.print("  [yellow]⚠ No se pudo loguear heartbeat (PostgreSQL no disponible)[/yellow]")
 
 
+def cmd_policy(narrative: str):
+    """Analizar un problema de politica publica y evaluar factibilidad de datos.
+
+    Dado una narrativa del problema, el agente:
+    1. Extrae variables requeridas (LLM)
+    2. Busca cada variable en el Knowledge Graph
+    3. Clasifica: existe con datos / gap
+    4. Genera reporte de factibilidad
+    """
+    console.print(Panel(
+        f"[bold]Problema:[/bold] {narrative}",
+        title="[bold cyan]Policy Problem Analyzer[/bold cyan]",
+        border_style="cyan",
+    ))
+
+    g = load_graph()
+
+    if g.graph.number_of_nodes() == 0:
+        console.print("[red]Error: el nomenclador esta vacio. Ejecuta 'ingest' o 'profile' primero.[/red]")
+        return
+
+    console.print(f"[dim]Grafo: {g.graph.number_of_nodes()} nodos, {g.graph.number_of_edges()} aristas[/dim]\n")
+    console.print("[bold]Fase 1:[/bold] Extrayendo variables del problema...")
+
+    try:
+        result = analyze_policy_problem(narrative, g)
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/red]")
+        return
+
+    # Mostrar resumen del problema reformulado
+    console.print(f"\n[bold cyan]Problema reformulado:[/bold cyan]")
+    console.print(f"  {result['problem_summary']}\n")
+
+    # Mostrar variables
+    console.print("[bold]Fase 2:[/bold] Buscando variables en el nomenclador...\n")
+
+    table = RichTable(title="Variables requeridas", show_lines=True)
+    table.add_column("Variable", style="bold")
+    table.add_column("Estado")
+    table.add_column("Fuentes")
+    table.add_column("Calidad")
+    table.add_column("Utilizable?")
+
+    for v in result["variables"]:
+        if v["status"] == "available":
+            sources = ", ".join(v.get("sources", [])) or "-"
+            qs = v.get("quality_score", 0.0)
+            usable = "Si" if v.get("usable") else "No"
+            status_str = "[green]Existe[/green]"
+            quality_str = f"{qs:.2f}" if qs > 0 else "-"
+        else:
+            sources = "-"
+            quality_str = "-"
+            usable = "-"
+            status_str = "[red]GAP[/red]"
+        table.add_row(v["name"], status_str, sources, quality_str, usable)
+
+    console.print(table)
+
+    # Mostrar cobertura
+    cov = result["coverage"]
+    color = "green" if cov["percentage"] >= 70 else "yellow" if cov["percentage"] >= 40 else "red"
+    console.print(f"\nCobertura: [{color}]{cov['available']}/{cov['total']} variables ({cov['percentage']}%)[/{color}]")
+
+    # Mostrar reporte
+    console.print("\n[bold]Fase 3:[/bold] Reporte de factibilidad\n")
+    console.print(Panel(result["report"], title="Reporte", border_style="cyan"))
+
+
+def cmd_discover(domain: str = "", gen_insights: bool = False, plain: bool = False, min_score: float = 0.0, output_file: str = ""):
+    """Descubrir problemas de politica publica abordables con los datos del grafo.
+
+    1. Opcionalmente genera insights para cada fuente del grafo
+    2. Recolecta insights acumulados + conceptos
+    3. LLM genera hipotesis de problemas
+    4. Para cada hipotesis, evalua factibilidad con analyze_policy_problem
+    5. Prioriza por score (cobertura x calidad x impacto cross-domain)
+    """
+    if plain:
+        _cmd_discover_plain(domain, gen_insights, min_score=min_score, output_file=output_file)
+        return
+
+    console.print(Panel(
+        f"[bold]Dominio:[/bold] {domain or 'todos'}  |  [bold]Generar insights:[/bold] {'si' if gen_insights else 'no'}",
+        title="[bold magenta]Discover: Descubrimiento de Problemas[/bold magenta]",
+        border_style="magenta",
+    ))
+
+    g = load_graph()
+
+    if g.graph.number_of_nodes() == 0:
+        console.print("[red]Error: el nomenclador esta vacio. Ejecuta 'ingest' o 'profile' primero.[/red]")
+        return
+
+    console.print(f"[dim]Grafo: {g.graph.number_of_nodes()} nodos, {g.graph.number_of_edges()} aristas[/dim]")
+
+    # Fase 0: Generar insights si se solicita
+    if gen_insights:
+        console.print("\n[bold]Fase 0:[/bold] Generando insights por fuente...")
+        sources = [n for n, d in g.graph.nodes(data=True) if d.get("type") == "source"]
+        for source_id in sources:
+            source_name = g.graph.nodes[source_id].get("name", source_id)
+            # Eliminar insights viejos de esta fuente (dedup)
+            old = g.find_insights_of_source(source_id)
+            if old:
+                g.delete_insights_of_source(source_id)
+                console.print(f"  [dim]{source_name}: {len(old)} insights viejos eliminados[/dim]")
+            console.print(f"  [cyan]Generando insights para {source_name}...[/cyan]")
+            try:
+                saved = generate_insights_for_source(g, source_id, domain=domain)
+                console.print(f"  [green]{len(saved)} insights generados[/green]")
+            except Exception as e:
+                console.print(f"  [red]Error: {e}[/red]")
+        save_graph(g)
+        console.print()
+
+    # Mostrar insights acumulados
+    insights = g.find_insights(domain=domain if domain else None)
+    console.print(f"[bold]Insights acumulados:[/bold] {len(insights)}")
+    if insights:
+        for ins in insights[:5]:
+            obs = ins.get("observation", "")[:80]
+            console.print(f"  [dim]- {ins.get('id', '?')}: {obs}...[/dim]")
+        if len(insights) > 5:
+            console.print(f"  [dim]... y {len(insights) - 5} mas[/dim]")
+    console.print()
+
+    # Fase 1: Generar hipotesis
+    console.print("[bold]Fase 1:[/bold] Generando hipotesis con LLM...")
+    try:
+        result = discover(g, domain=domain, auto_analyze=True)
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/red]")
+        return
+
+    hypotheses = result.get("hypotheses", [])
+    discoveries = result.get("discoveries", [])
+
+    # Filtrar por min_score
+    if min_score > 0:
+        discoveries = [d for d in discoveries if d.get("score", 0.0) >= min_score]
+
+    console.print(f"\n[bold magenta]{len(discoveries)} hipotesis mostradas[/bold magenta] (de {len(hypotheses)} generadas, min_score={min_score})\n")
+
+    # Mostrar ranking de priorizacion
+    if discoveries and any(d.get("score", 0) > 0 for d in discoveries):
+        console.print("[bold]Ranking de priorizacion:[/bold]")
+        for i, disc in enumerate(discoveries):
+            score = disc.get("score", 0.0)
+            cd = disc.get("cross_domain", False)
+            cd_label = " [cyan](cross-domain)[/cyan]" if cd else ""
+            title = disc.get("title", "?")
+            cov = disc.get("coverage_pct", 0)
+            aq = disc.get("avg_quality", 0.0)
+            console.print(f"  {i+1}. [bold]{title}[/bold] - score: {score} (cob: {cov}%, cal: {aq}){cd_label}")
+        console.print()
+
+    # Mostrar cada hipotesis con su analisis (ordenadas por score)
+    for i, disc in enumerate(discoveries):
+        title = disc.get("title", f"Hipotesis {i+1}")
+        narrative = ""
+        rationale = disc.get("rationale", "")
+        hint = disc.get("feasibility_hint", "?")
+        score = disc.get("score", 0.0)
+        cd = disc.get("cross_domain", False)
+
+        # Buscar la hipotesis correspondiente
+        for h in hypotheses:
+            if h.get("title", "") == title:
+                narrative = h.get("narrative", "")
+                break
+
+        hint_color = "green" if hint == "ALTA" else "yellow" if hint == "MEDIA" else "red"
+        cd_label = " [cyan](cross-domain)[/cyan]" if cd else ""
+
+        console.print(Panel(
+            f"[bold]{narrative}[/bold]\n\n[dim]Rationale: {rationale}[/dim]\n[dim]Score: {score} | Cobertura: {disc.get('coverage_pct', 0)}% | Calidad: {disc.get('avg_quality', 0.0)}[/dim]{cd_label}",
+            title=f"{i+1}. {title} [{hint_color}]{hint}[/{hint_color}]",
+            border_style="magenta",
+        ))
+
+        # Mostrar resultado del analisis
+        if "error" in disc:
+            console.print(f"  [red]Error en analisis: {disc['error']}[/red]\n")
+            continue
+
+        analysis = disc.get("analysis", {})
+        cov = analysis.get("coverage", {})
+        color = "green" if cov.get("percentage", 0) >= 70 else "yellow" if cov.get("percentage", 0) >= 40 else "red"
+
+        # Tabla de variables
+        table = RichTable(title=f"Variables - {title}", show_lines=True)
+        table.add_column("Variable", style="bold")
+        table.add_column("Estado")
+        table.add_column("Fuentes")
+        table.add_column("Calidad")
+        table.add_column("Utilizable?")
+
+        for v in analysis.get("variables", []):
+            if v["status"] == "available":
+                sources = ", ".join(v.get("sources", [])) or "-"
+                qs = v.get("quality_score", 0.0)
+                usable = "Si" if v.get("usable") else "No"
+                status_str = "[green]Existe[/green]"
+                quality_str = f"{qs:.2f}" if qs > 0 else "-"
+            else:
+                sources = "-"
+                quality_str = "-"
+                usable = "-"
+                status_str = "[red]GAP[/red]"
+            table.add_row(v["name"], status_str, sources, quality_str, usable)
+
+        console.print(table)
+        console.print(f"Cobertura: [{color}]{cov.get('available', 0)}/{cov.get('total', 0)} ({cov.get('percentage', 0)}%)[/{color}]")
+
+        # Reporte
+        report = analysis.get("report", "")
+        if report:
+            console.print(Panel(report, title="Reporte de factibilidad", border_style="cyan"))
+        console.print()
+
+
+def _cmd_discover_plain(domain: str = "", gen_insights: bool = False, min_score: float = 0.0, output_file: str = ""):
+    """Discover en modo plain text/markdown sin box-drawing para PowerShell."""
+    import io
+    out_buf = io.StringIO()
+
+    def p(*args, **kwargs):
+        print(*args, **kwargs)
+        if output_file:
+            print(*args, file=out_buf, **kwargs)
+
+    p(f"# Discover: Descubrimiento de Problemas")
+    p(f"**Dominio:** {domain or 'todos'}  |  **Generar insights:** {'si' if gen_insights else 'no'}  |  **Min score:** {min_score}")
+    p()
+
+    g = load_graph()
+
+    if g.graph.number_of_nodes() == 0:
+        p("ERROR: el nomenclador esta vacio. Ejecuta 'ingest' o 'profile' primero.")
+        return
+
+    p(f"*Grafo: {g.graph.number_of_nodes()} nodos, {g.graph.number_of_edges()} aristas*")
+    p()
+
+    # Fase 0: Generar insights si se solicita
+    if gen_insights:
+        p("## Fase 0: Generando insights por fuente...")
+        sources = [n for n, d in g.graph.nodes(data=True) if d.get("type") == "source"]
+        for source_id in sources:
+            source_name = g.graph.nodes[source_id].get("name", source_id)
+            old = g.find_insights_of_source(source_id)
+            if old:
+                g.delete_insights_of_source(source_id)
+                p(f"  {source_name}: {len(old)} insights viejos eliminados")
+            p(f"  Generando insights para {source_name}...")
+            try:
+                saved = generate_insights_for_source(g, source_id, domain=domain)
+                p(f"  -> {len(saved)} insights generados")
+            except Exception as e:
+                p(f"  -> Error: {e}")
+        save_graph(g)
+        p()
+
+    # Mostrar insights acumulados
+    insights = g.find_insights(domain=domain if domain else None)
+    p(f"## Insights acumulados: {len(insights)}")
+    if insights:
+        for ins in insights[:5]:
+            obs = ins.get("observation", "")[:80]
+            p(f"  - {ins.get('id', '?')}: {obs}...")
+        if len(insights) > 5:
+            p(f"  ... y {len(insights) - 5} mas")
+    p()
+
+    # Fase 1: Generar hipotesis
+    p("## Fase 1: Generando hipotesis con LLM...")
+    try:
+        result = discover(g, domain=domain, auto_analyze=True)
+    except Exception as e:
+        p(f"ERROR: {e}")
+        return
+
+    hypotheses = result.get("hypotheses", [])
+    discoveries = result.get("discoveries", [])
+
+    # Filtrar por min_score
+    if min_score > 0:
+        discoveries = [d for d in discoveries if d.get("score", 0.0) >= min_score]
+
+    p(f"\n**{len(discoveries)} hipotesis mostradas** (de {len(hypotheses)} generadas, min_score={min_score})\n")
+
+    # Ranking de priorizacion
+    if discoveries and any(d.get("score", 0) > 0 for d in discoveries):
+        p("## Ranking de priorizacion")
+        p("| # | Hipotesis | Score | Cobertura | Calidad | Cross-domain |")
+        p("|---|-----------|-------|-----------|---------|--------------|")
+        for i, disc in enumerate(discoveries):
+            score = disc.get("score", 0.0)
+            cd = "Si" if disc.get("cross_domain", False) else "No"
+            title = disc.get("title", "?")[:60]
+            cov = disc.get("coverage_pct", 0)
+            aq = disc.get("avg_quality", 0.0)
+            p(f"| {i+1} | {title} | {score} | {cov}% | {aq} | {cd} |")
+        p()
+
+    # Mostrar cada hipotesis con su analisis (ordenadas por score)
+    for i, disc in enumerate(discoveries):
+        title = disc.get("title", f"Hipotesis {i+1}")
+        narrative = ""
+        rationale = disc.get("rationale", "")
+        hint = disc.get("feasibility_hint", "?")
+        score = disc.get("score", 0.0)
+        cd = disc.get("cross_domain", False)
+
+        for h in hypotheses:
+            if h.get("title", "") == title:
+                narrative = h.get("narrative", "")
+                break
+
+        cd_label = " **(cross-domain)**" if cd else ""
+        p(f"---\n")
+        p(f"## {i+1}. {title} [{hint}]{cd_label}")
+        p(f"**Score:** {score} | **Cobertura:** {disc.get('coverage_pct', 0)}% | **Calidad:** {disc.get('avg_quality', 0.0)}")
+        p()
+        p(f"**{narrative}**")
+        p()
+        p(f"*Rationale: {rationale}*")
+        p()
+
+        if "error" in disc:
+            p(f"ERROR en analisis: {disc['error']}\n")
+            continue
+
+        analysis = disc.get("analysis", {})
+        cov = analysis.get("coverage", {})
+
+        # Tabla de variables en markdown
+        p(f"### Variables - {title}")
+        p()
+        p("| Variable | Estado | Fuentes | Calidad | Utilizable? |")
+        p("|----------|--------|---------|---------|-------------|")
+        for v in analysis.get("variables", []):
+            if v["status"] == "available":
+                sources = ", ".join(v.get("sources", [])) or "-"
+                qs = v.get("quality_score", 0.0)
+                usable = "Si" if v.get("usable") else "No"
+                quality_str = f"{qs:.2f}" if qs > 0 else "-"
+                p(f"| {v['name']} | Existe | {sources} | {quality_str} | {usable} |")
+            else:
+                p(f"| {v['name']} | GAP | - | - | - |")
+        p()
+        p(f"**Cobertura:** {cov.get('available', 0)}/{cov.get('total', 0)} ({cov.get('percentage', 0)}%)")
+        p()
+
+        # Reporte
+        report = analysis.get("report", "")
+        if report:
+            p(f"### Reporte de factibilidad")
+            p()
+            p(report)
+        p()
+
+    # Guardar a archivo si se solicito
+    if output_file:
+        from pathlib import Path
+        out_path = Path(output_file)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(out_buf.getvalue(), encoding="utf-8")
+        print(f"\nReporte guardado en: {out_path}")
+
+
+def cmd_deep_dive(title: str, plain: bool = False, output_file: str = ""):
+    """Deep-dive: generar plan de analisis accionable para una hipotesis.
+
+    Busca la hipotesis por titulo (match parcial) en el grafo y genera un plan.
+    """
+    import io
+    out_buf = io.StringIO()
+
+    def p(*args, **kwargs):
+        print(*args, **kwargs)
+        if output_file:
+            print(*args, file=out_buf, **kwargs)
+
+    g = load_graph()
+    if g.graph.number_of_nodes() == 0:
+        if plain:
+            p("ERROR: el nomenclador esta vacio.")
+        else:
+            console.print("[red]ERROR: el nomenclador esta vacio.[/red]")
+        return
+
+    # Analizar factibilidad directamente con el titulo como narrativa
+    # (evita re-ejecutar discover que regenera titulos no deterministicos)
+    if plain:
+        p("# Deep-dive: Plan de Analisis")
+        p(f"**Hipotesis:** {title}")
+        p()
+    else:
+        console.print(Panel(
+            f"[bold]Hipotesis:[/bold] {title}",
+            title="[bold cyan]Deep-dive: Plan de Analisis[/bold cyan]",
+            border_style="cyan",
+        ))
+
+    if not plain:
+        console.print("[dim]Analizando factibilidad y generando plan...[/dim]")
+    else:
+        p("Analizando factibilidad y generando plan...")
+
+    try:
+        plan = deep_dive(g, title, narrative=title, analysis=None)
+    except Exception as e:
+        if plain:
+            p(f"ERROR generando plan: {e}")
+        else:
+            console.print(f"[red]ERROR generando plan: {e}[/red]")
+        return
+
+    # Mostrar plan
+    if plain:
+        _render_deep_dive_plain(plan, p)
+    else:
+        _render_deep_dive_rich(plan)
+
+    # Guardar a archivo
+    if output_file:
+        from pathlib import Path
+        out_path = Path(output_file)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(out_buf.getvalue(), encoding="utf-8")
+        print(f"\nPlan guardado en: {out_path}")
+
+
+def _render_deep_dive_rich(plan: dict):
+    """Renderizar plan deep-dive en modo rich."""
+    console.print()
+    console.print(Panel(
+        plan.get("summary", ""),
+        title=f"[bold]{plan.get('plan_title', 'Plan')}[/bold]",
+        border_style="green",
+    ))
+
+    # Stats
+    cov = plan.get("coverage_pct", 0)
+    nvars = plan.get("variables_count", 0)
+    effort = plan.get("estimated_total_effort", "?")
+    time = plan.get("estimated_time", "?")
+    console.print(f"[bold]Cobertura:[/bold] {cov}%  |  [bold]Variables:[/bold] {nvars}  |  [bold]Esfuerzo total:[/bold] {effort}  |  [bold]Dias-persona:[/bold] {time}")
+    console.print()
+
+    # Steps
+    steps = plan.get("steps", [])
+    if steps:
+        table = Table(title="Pasos del plan", show_lines=True)
+        table.add_column("#", style="cyan", width=3)
+        table.add_column("Paso", style="bold")
+        table.add_column("Operacion", style="magenta")
+        table.add_column("Fuentes", style="dim")
+        table.add_column("Esfuerzo", style="yellow")
+        table.add_column("Descripcion")
+
+        for s in steps:
+            effort = s.get("effort", "?")
+            effort_color = "green" if effort == "bajo" else "yellow" if effort == "medio" else "red"
+            sources = ", ".join(s.get("sources", [])) or "-"
+            table.add_row(
+                str(s.get("step", "")),
+                s.get("title", ""),
+                s.get("operation", ""),
+                sources,
+                f"[{effort_color}]{effort}[/{effort_color}]",
+                s.get("description", ""),
+            )
+        console.print(table)
+
+        # Join hints
+        for s in steps:
+            jh = s.get("join_hint", "")
+            if jh:
+                console.print(f"  [dim]Join paso {s.get('step')}: {s.get('title')} -> {jh}[/dim]")
+        console.print()
+
+    # Risks
+    risks = plan.get("risks", [])
+    if risks:
+        console.print("[bold yellow]Riesgos y limitaciones:[/bold yellow]")
+        for r in risks:
+            console.print(f"  - {r}")
+        console.print()
+
+    # Final output
+    final = plan.get("final_output", "")
+    if final:
+        console.print(Panel(final, title="[bold green]Output final esperado[/bold green]", border_style="green"))
+    console.print()
+
+
+def _render_deep_dive_plain(plan: dict, p):
+    """Renderizar plan deep-dive en modo plain/markdown."""
+    p(f"## {plan.get('plan_title', 'Plan')}")
+    p()
+    p(f"**Resumen:** {plan.get('summary', '')}")
+    p()
+
+    cov = plan.get("coverage_pct", 0)
+    nvars = plan.get("variables_count", 0)
+    effort = plan.get("estimated_total_effort", "?")
+    time = plan.get("estimated_time", "?")
+    p(f"**Cobertura:** {cov}%  |  **Variables:** {nvars}  |  **Esfuerzo total:** {effort}  |  **Dias-persona:** {time}")
+    p()
+
+    # Steps
+    steps = plan.get("steps", [])
+    if steps:
+        p("## Pasos del plan")
+        p()
+        p("| # | Paso | Operacion | Fuentes | Esfuerzo | Descripcion |")
+        p("|---|------|-----------|---------|----------|-------------|")
+        for s in steps:
+            sources = ", ".join(s.get("sources", [])) or "-"
+            p(f"| {s.get('step', '')} | {s.get('title', '')} | {s.get('operation', '')} | {sources} | {s.get('effort', '?')} | {s.get('description', '')[:80]} |")
+        p()
+
+        # Join hints
+        has_joins = any(s.get("join_hint") for s in steps)
+        if has_joins:
+            p("### Joins sugeridos")
+            p()
+            for s in steps:
+                jh = s.get("join_hint", "")
+                if jh:
+                    p(f"- Paso {s.get('step')} ({s.get('title', '')}): {jh}")
+            p()
+
+    # Risks
+    risks = plan.get("risks", [])
+    if risks:
+        p("## Riesgos y limitaciones")
+        p()
+        for r in risks:
+            p(f"- {r}")
+        p()
+
+    # Final output
+    final = plan.get("final_output", "")
+    if final:
+        p("## Output final esperado")
+        p()
+        p(final)
+        p()
+
+
+def cmd_rapid_assessment(csv_path: str, output_file: str = "", plain: bool = False):
+    """Rapid Assessment Pass 1: diagnosticar dataset sin contexto humano."""
+    if not os.path.exists(csv_path):
+        console.print(f"[red]Archivo no encontrado: {csv_path}[/red]")
+        return
+
+    console.print(f"\n[bold cyan]Rapid Assessment: {csv_path}[/bold cyan]\n")
+    console.print("[dim]Perfilando + quality + inference + PII + matching...[/dim]\n")
+
+    report = assess_csv(csv_path)
+
+    if plain:
+        text = format_report_plain(report)
+        console.print(text)
+    else:
+        text = format_report_markdown(report)
+        # Mostrar resumen en consola con rich
+        console.print(f"\n[bold]Calidad global:[/bold] {report.avg_quality_score:.0f}/100 (Grade {report.global_grade})")
+        console.print(f"[bold]Matching:[/bold] {report.matched_count} matched | {report.inferred_count} inferred | [yellow]{report.unmatched_count} sin match[/yellow]")
+        console.print(f"[bold]PII:[/bold] {report.pii_count} | [bold]Sensibles:[/bold] {report.sensitive_count} | [bold]Problemas:[/bold] {report.issues_count}")
+        console.print(f"[bold]Interop candidates:[/bold] {len(report.interop_candidates)}")
+        console.print()
+
+        # Tabla resumen de columnas
+        tbl = RichTable(title="Columnas", show_lines=False)
+        tbl.add_column("Columna", style="cyan")
+        tbl.add_column("Tipo")
+        tbl.add_column("Grade", justify="center")
+        tbl.add_column("Match", justify="center")
+        tbl.add_column("Flags")
+        for c in report.columns:
+            icon = "[green]OK[/green]" if c.match_status == "matched" else ("[yellow]~[/yellow]" if c.match_status == "inferred" else "[red]?[/red]")
+            flags = []
+            if c.is_pii:
+                flags.append("[red]PII[/red]")
+            if c.is_sensitive:
+                flags.append("[red]SENS[/red]")
+            if c.issues:
+                flags.append("[yellow]![/yellow]")
+            tbl.add_row(c.name, c.data_type, c.quality_grade, icon, " ".join(flags))
+        console.print(tbl)
+
+        if report.unmatched_count > 0:
+            console.print(f"\n[yellow]ACCION REQUERIDA: {report.unmatched_count} variables necesitan contexto humano[/yellow]")
+            for c in report.columns:
+                if c.match_status == "unmatched":
+                    samples = ", ".join(c.sample_values[:5])
+                    console.print(f"  [red]?[/red] {c.name:30s} valores: {samples}")
+
+    # Guardar solo si se especifica --output (entregable explicito)
+    if output_file:
+        with open(output_file, "w", encoding="utf-8") as f:
+            f.write(text)
+        console.print(f"\n[green]Reporte guardado en: {output_file}[/green]")
+
+
+def cmd_enriched_analysis(csv_path: str, metadata_path: str = "", output_file: str = "", plain: bool = False, skip_moa: bool = False):
+    """Enriched Analysis Pass 2: metadata + re-matching + MoA."""
+    if not os.path.exists(csv_path):
+        console.print(f"[red]Archivo no encontrado: {csv_path}[/red]")
+        return
+
+    console.print(f"\n[bold cyan]Enriched Analysis: {csv_path}[/bold cyan]\n")
+
+    if metadata_path:
+        console.print(f"[dim]Metadata humana: {metadata_path}[/dim]")
+    else:
+        console.print("[dim]Sin metadata humana — LLM inferira metadata para variables sin match[/dim]")
+
+    if not skip_moa:
+        console.print("[dim]MoA: 3 agentes + sintetizador (puede tardar)[/dim]")
+
+    console.print()
+
+    report = run_enriched_analysis(csv_path, metadata_path=metadata_path, run_moa=not skip_moa)
+
+    if plain:
+        text = format_enriched_report_plain(report)
+        console.print(text)
+    else:
+        text = format_enriched_report_markdown(report)
+
+        # Console summary
+        console.print(f"\n[bold]Pass 1:[/bold] {report.pass1_matched} matched | {report.pass1_inferred} inferred | [yellow]{report.pass1_unmatched} sin match[/yellow]")
+        console.print(f"[bold]Pass 2:[/bold] {report.final_matched} matched | {report.final_inferred} inferred | [red]{report.final_unmatched} sin match[/red]")
+        console.print(f"[bold]Enrichment:[/bold] {report.enrichment_source} (+{report.enriched_count} resueltas)")
+
+        if report.moa_analysis:
+            console.print(f"\n[bold green]MoA completado[/bold green] ({len(report.moa_analysis)} chars)")
+
+        # Table
+        tbl = RichTable(title="Matching Pass 1 -> Pass 2", show_lines=False)
+        tbl.add_column("Columna", style="cyan")
+        tbl.add_column("P1", justify="center")
+        tbl.add_column("P2", justify="center")
+        tbl.add_column("Concepto")
+        tbl.add_column("Fuente", style="dim")
+
+        for ec in report.columns:
+            p1 = "[green]OK[/green]" if ec.pass1_status == "matched" else ("[yellow]~[/yellow]" if ec.pass1_status == "inferred" else "[red]?[/red]")
+            p2 = "[green]OK[/green]" if ec.final_status == "matched" else ("[yellow]~[/yellow]" if ec.final_status == "inferred" else "[red]?[/red]")
+            tbl.add_row(ec.name, p1, p2, ec.final_concept or "?", ec.enrichment_source)
+        console.print(tbl)
+
+        if report.final_unmatched > 0:
+            console.print(f"\n[red]Sin resolver: {report.final_unmatched} variables[/red]")
+
+    # Guardar solo si se especifica --output (entregable explicito)
+    if output_file:
+        with open(output_file, "w", encoding="utf-8") as f:
+            f.write(text)
+        console.print(f"\n[green]Reporte guardado en: {output_file}[/green]")
+
+
+def cmd_communities(reports: bool = False, resolution: float = 1.0):
+    """Inspeccionar comunidades del nomenclador (inspirado en GraphRAG)."""
+    g = load_graph()
+
+    if reports:
+        console.print(f"\n[bold cyan]Generando community reports (Louvain + Groq LLM)...[/bold cyan]\n")
+        communities = g.get_community_reports(resolution=resolution)
+        if not communities:
+            console.print("[yellow]No hay suficientes nodos para detectar comunidades.[/yellow]")
+            return
+        for c in communities:
+            console.print(Panel(
+                c["report"],
+                title=f"Comunidad {c['community_id']} — {c['size']} nodos ({c['dominant_type']})",
+                border_style="cyan",
+            ))
+            console.print(f"[dim]Miembros: {', '.join(c['member_names'][:10])}{'...' if len(c['member_names']) > 10 else ''}[/dim]\n")
+    else:
+        console.print(f"\n[bold cyan]Detectando comunidades (Louvain, resolution={resolution})...[/bold cyan]\n")
+        communities = g.detect_communities(resolution=resolution)
+        if not communities:
+            console.print("[yellow]No hay suficientes nodos para detectar comunidades.[/yellow]")
+            return
+
+        tbl = RichTable(title=f"Comunidades detectadas: {len(communities)}", show_lines=False)
+        tbl.add_column("ID", style="dim", justify="right")
+        tbl.add_column("Size", justify="right")
+        tbl.add_column("Tipo dominante", style="cyan")
+        tbl.add_column("Miembros")
+
+        for c in communities:
+            names = ", ".join(c["member_names"][:10])
+            if len(c["member_names"]) > 10:
+                names += f" ... (+{len(c['member_names']) - 10})"
+            tbl.add_row(str(c["community_id"]), str(c["size"]), c["dominant_type"], names)
+
+        console.print(tbl)
+        console.print(f"\n[dim]Usa 'communities --reports' para generar resumenes narrativos con LLM.[/dim]")
+        console.print(f"[dim]Usa 'communities --resolution 1.5' para comunidades mas pequenas.[/dim]")
+
+
 def main():
     if len(sys.argv) < 2:
         console.print("[bold]Agente de Governance - Nomenclador Institucional[/bold]\n")
@@ -1538,6 +2297,14 @@ def main():
         console.print("  impact <variable>     Analizar impacto de cambiar/deprecar un concepto")
         console.print("  demo-agri-env          Demo: interoperabilidad MAG <-> MARN")
         console.print("  health                 Diagnostico del governance-agent [--fix] [--retry] [--heartbeat]")
+        console.print("  policy \"problema\"      Analizar problema de politica y evaluar factibilidad de datos")
+        console.print("  discover [dominio]     Descubrir problemas abordables con los datos del grafo")
+        console.print("                          Flags: [--insights] [--plain] [--min-score N] [--output file.md]")
+        console.print("  deep-dive \"titulo\"     Plan de analisis accionable para una hipotesis [--plain] [--output file.md]")
+        console.print("  rapid-assessment <csv>  Diagnostico rapido sin contexto humano [--output file.md] [--plain]")
+        console.print("  enriched-analysis <csv>  Pass 2: metadata + re-matching + MoA [--metadata file.json] [--output file.md] [--skip-moa]")
+        console.print("  communities            Detectar comunidades de variables relacionadas (Louvain)")
+        console.print("                          Flags: [--reports] [--resolution N]")
         return
 
     cmd = sys.argv[1]
@@ -1665,6 +2432,98 @@ def main():
         do_heartbeat = "--heartbeat" in sys.argv
         dry_run = "--dry-run" in sys.argv
         cmd_health(do_fix=do_fix, do_retry=do_retry, do_heartbeat=do_heartbeat, dry_run=dry_run)
+    elif cmd == "policy":
+        narrative = " ".join(sys.argv[2:]) if len(sys.argv) >= 3 else ""
+        if not narrative:
+            console.print("[red]Uso: policy \"descripcion del problema\"[/red]")
+            console.print("[dim]Ej: policy \"Necesitamos monitorear cobertura de vacunacion infantil en zonas rurales\"[/dim]")
+            return
+        cmd_policy(narrative)
+    elif cmd == "discover":
+        domain = ""
+        gen_insights = "--insights" in sys.argv
+        plain = "--plain" in sys.argv
+        min_score = 0.0
+        output_file = ""
+        # Parsear flags con valores y filtrar args posicionales
+        filtered = []
+        skip_next = False
+        for j, arg in enumerate(sys.argv[2:], start=2):
+            if skip_next:
+                skip_next = False
+                continue
+            if arg == "--min-score" and j + 1 < len(sys.argv):
+                try:
+                    min_score = float(sys.argv[j + 1])
+                except ValueError:
+                    pass
+                skip_next = True
+                continue
+            if arg == "--output" and j + 1 < len(sys.argv):
+                output_file = sys.argv[j + 1]
+                skip_next = True
+                continue
+            if arg.startswith("--"):
+                continue
+            filtered.append(arg)
+        domain = filtered[0] if filtered else ""
+        cmd_discover(domain=domain, gen_insights=gen_insights, plain=plain, min_score=min_score, output_file=output_file)
+    elif cmd == "rapid-assessment" and len(sys.argv) >= 3:
+        output_file = ""
+        plain = "--plain" in sys.argv
+        if "--output" in sys.argv:
+            idx = sys.argv.index("--output")
+            if idx + 1 < len(sys.argv):
+                output_file = sys.argv[idx + 1]
+        cmd_rapid_assessment(sys.argv[2], output_file=output_file, plain=plain)
+    elif cmd == "enriched-analysis" and len(sys.argv) >= 3:
+        metadata_path = ""
+        output_file = ""
+        plain = "--plain" in sys.argv
+        skip_moa = "--skip-moa" in sys.argv
+        if "--metadata" in sys.argv:
+            idx = sys.argv.index("--metadata")
+            if idx + 1 < len(sys.argv):
+                metadata_path = sys.argv[idx + 1]
+        if "--output" in sys.argv:
+            idx = sys.argv.index("--output")
+            if idx + 1 < len(sys.argv):
+                output_file = sys.argv[idx + 1]
+        cmd_enriched_analysis(sys.argv[2], metadata_path=metadata_path, output_file=output_file, plain=plain, skip_moa=skip_moa)
+    elif cmd == "deep-dive":
+        plain = "--plain" in sys.argv
+        output_file = ""
+        # Extraer --output VALUE antes de filtrar args
+        filtered = []
+        skip_next = False
+        for j, arg in enumerate(sys.argv[2:], start=2):
+            if skip_next:
+                skip_next = False
+                continue
+            if arg == "--output" and j + 1 < len(sys.argv):
+                output_file = sys.argv[j + 1]
+                skip_next = True
+                continue
+            if arg.startswith("--"):
+                continue
+            filtered.append(arg)
+        title = " ".join(filtered)
+        if not title:
+            console.print("[red]Uso: deep-dive \"titulo de la hipotesis\" [--plain] [--output archivo.md][/red]")
+            console.print("[dim]Ej: deep-dive \"recursos hospitalarios\" --plain --output plan.md[/dim]")
+            return
+        cmd_deep_dive(title, plain=plain, output_file=output_file)
+    elif cmd == "communities":
+        do_reports = "--reports" in sys.argv
+        resolution = 1.0
+        if "--resolution" in sys.argv:
+            idx = sys.argv.index("--resolution")
+            if idx + 1 < len(sys.argv):
+                try:
+                    resolution = float(sys.argv[idx + 1])
+                except ValueError:
+                    pass
+        cmd_communities(reports=do_reports, resolution=resolution)
     else:
         console.print(f"[red]Comando no reconocido: {cmd}[/red]")
 

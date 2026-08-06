@@ -1,0 +1,62 @@
+[
+  {
+    "id": "q01",
+    "question": "Que norma se utiliza para la clasificacion de sexo?",
+    "ground_truth": "Se utiliza la clasificacion ISO 5218, donde 0 = desconocido, 1 = masculino, 2 = femenino, 9 = no aplicable. Es obligatoria para todos los sistemas de informacion en salud del pais.",
+    "expected_source": "sample_ley_general_salud"
+  },
+  {
+    "id": "q02",
+    "question": "Que estandar se usa para el diagnostico clinico?",
+    "ground_truth": "Se utiliza la Clasificacion Internacional de Enfermedades, decima revision (ICD-10) emitida por la Organizacion Mundial de la Salud. Todo diagnostico clinico debe codificarse con el codigo ICD-10 correspondiente.",
+    "expected_source": "sample_ley_general_salud"
+  },
+  {
+    "id": "q03",
+    "question": "Como se codifica el nivel educativo?",
+    "ground_truth": "Se utiliza la Clasificacion Internacional Normalizada de la Educacion (ISCED 2011) emitida por UNESCO. Los codigos van de 0 (educacion infantil) a 9 (no especificado).",
+    "expected_source": "sample_ley_general_salud"
+  },
+  {
+    "id": "q04",
+    "question": "Que clasificacion se usa para la ocupacion?",
+    "ground_truth": "Se utiliza la Clasificacion Internacional Uniforme de Ocupaciones (ISCO-08) de la Organizacion Internacional del Trabajo. Los codigos principales van de 1 (directores y gerentes) a 6 y mas.",
+    "expected_source": "sample_ley_general_salud"
+  },
+  {
+    "id": "q05",
+    "question": "Que variables se consideran datos sensibles segun la ley?",
+    "ground_truth": "Las variables de sexo, fecha de nacimiento y diagnostico se consideran datos sensibles y su tratamiento se regira por la Ley de Proteccion de Datos Personales.",
+    "expected_source": "sample_ley_general_salud"
+  },
+  {
+    "id": "q06",
+    "question": "Que formato se debe usar para la fecha de nacimiento?",
+    "ground_truth": "Se utiliza el calendario gregoriano. Ningun sistema podra almacenar fechas en formatos no estandarizados.",
+    "expected_source": "sample_ley_general_salud"
+  },
+  {
+    "id": "q07",
+    "question": "Cuales son los codigos validos de ISO 5218 para sexo?",
+    "ground_truth": "Los codigos son: 0 = desconocido, 1 = masculino, 2 = femenino, 9 = no aplicable.",
+    "expected_source": "sample_ley_general_salud"
+  },
+  {
+    "id": "q08",
+    "question": "Que articulo de la ley trata sobre proteccion de datos sensibles?",
+    "ground_truth": "El Articulo 48 trata sobre la proteccion de datos sensibles, indicando que sexo, fecha de nacimiento y diagnostico son datos sensibles regidos por la Ley de Proteccion de Datos Personales.",
+    "expected_source": "sample_ley_general_salud"
+  },
+  {
+    "id": "q09",
+    "question": "Quien emite la clasificacion ISCED para nivel educativo?",
+    "ground_truth": "La Clasificacion Internacional Normalizada de la Educacion (ISCED 2011) es emitida por UNESCO.",
+    "expected_source": "sample_ley_general_salud"
+  },
+  {
+    "id": "q10",
+    "question": "Que codigos ISCO-08 corresponden a tecnicos y profesionales de nivel medio?",
+    "ground_truth": "El codigo 3 corresponde a tecnicos y profesionales de nivel medio segun ISCO-08.",
+    "expected_source": "sample_ley_general_salud"
+  }
+]

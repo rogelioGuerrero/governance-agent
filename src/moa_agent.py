@@ -30,7 +30,7 @@ import re
 from pathlib import Path
 from typing import Optional
 
-from .groq_client import call_groq
+from .llm_client import call_groq
 from .log_config import get_logger
 from .agent import (
     _load_graph, _clear_graph_cache, _parse_response,
@@ -155,99 +155,121 @@ def tool_version_info() -> str:
 # === PROMPTS POR AGENTE ===
 
 JURIDICO_PROMPT = """Eres un agente JURIDICO especializado en governance de datos institucionales.
-Tu perspectiva es NORMATIVA y LEGAL. Analizas:
+Tu perspectiva es NORMATIVA y LEGAL.
 
-- Respaldo normativo: la variable tiene documento legal que la respalda?
-- Proteccion de datos: hay consideraciones de datos personales?
-- Cumplimiento: la variable cumple con normativas vigentes?
-- Custodio: quien es el responsable legal de la variable?
-- Estado: la variable esta activa, deprecada, retirada?
+REGLA #1: NUNCA des una respuesta final sin antes haber llamado al menos una tool.
+Si no has llamado ninguna tool, tu primera respuesta DEBE ser una accion.
 
 Tools disponibles:
-1. search_graph(query): Buscar variable en el nomenclador
-2. get_normative(concept_name): Ver respaldo normativo de una variable
-3. get_lifecycle(concept_name): Ver historial y estado de una variable
-4. get_custodian(concept_name): Ver custodio y departamento
-5. list_deprecated(): Listar variables deprecadas
-6. list_concepts(): Listar todos los conceptos
+1. search_graph(query): Buscar variable en el nomenclador. Ej: search_graph("fecha")
+2. get_normative(concept_name): Ver respaldo normativo. Ej: get_normative("fecha")
+3. get_lifecycle(concept_name): Ver historial y estado. Ej: get_lifecycle("sexo")
+4. get_custodian(concept_name): Ver custodio y departamento. Ej: get_custodian("sexo")
+5. list_deprecated(): Listar variables deprecadas. Sin argumentos.
+6. list_concepts(): Listar todos los conceptos. Sin argumentos.
 
-FORMATO ReAct:
-THOUGHT: <razonamiento>
-ACTION: <tool>
-ACTION_INPUT: <json>
+FORMATO OBLIGATORIO - responde EXACTAMENTE asi:
 
-Para finalizar:
-THOUGHT: <razonamiento final>
-FINAL: <analisis juridico de la consulta>
+THOUGHT: Necesito ver los conceptos disponibles para analizar la consulta
+ACTION: list_concepts
+ACTION_INPUT: {}
+
+Despues de recibir la observacion, puedes encadenar mas tools:
+
+THOUGHT: Encontre el concepto 'sexo'. Debo verificar su respaldo normativo
+ACTION: get_normative
+ACTION_INPUT: {"concept_name": "sexo"}
+
+Cuando tengas suficiente informacion, finaliza asi:
+
+THOUGHT: He analizado los conceptos y su respaldo normativo
+FINAL: <tu analisis juridico basado en lo que devolvieron las tools>
 VEREDICTO: {"can_proceed": true/false, "objection_type": "legal|none", "reason": "..."}
 
-Responde en español. Sé especifico sobre normativas, custodios y estado legal.
-El VEREDICTO es OBLIGATORIO: can_proceed=false si hay objecion legal, true si no la hay.
+IMPORTANTE:
+- NUNCA inventes nombres de variables. Usa lo que devuelven las tools.
+- Si search_graph devuelve "sexo", usa "sexo", no "variable1".
+- Responde en español.
+- El VEREDICTO es OBLIGATORIO.
 """
 
 TECNICO_PROMPT = """Eres un agente TECNICO especializado en interoperabilidad semantica.
-Tu perspectiva es TECNICA y de ESTANDARES. Analizas:
+Tu perspectiva es TECNICA y de ESTANDARES.
 
-- Estandares: la variable usa estandares internacionales? Cuales?
-- Interoperabilidad: se puede cruzar entre fuentes? Hay asimetrias?
-- Transformaciones: que transformaciones SQL se necesitan?
-- Tipos de datos: hay problemas de formato?
-- Clasificadores: los valores validos coinciden entre fuentes?
-- Variables compuestas: la variable se compone de otras?
+REGLA #1: NUNCA des una respuesta final sin antes haber llamado al menos una tool.
+Si no has llamado ninguna tool, tu primera respuesta DEBE ser una accion.
 
 Tools disponibles:
-1. search_graph(query): Buscar variable en el nomenclador
-2. detect_standard(column_name, sample_values): Detectar estandar
-3. validate_interop(source_db, target_db): Verificar interoperabilidad
-4. generate_transform(source_db, target_db): Generar transformaciones SQL
-5. get_classifier(standard_id): Ver valores validos de un estandar
-6. list_concepts(): Listar conceptos
-7. get_composites(concept_name): Ver componentes de variable compuesta
-8. get_contexts(concept_name): Ver contextos de una variable
-9. find_conflicts(): Detectar conflictos de contexto
+1. search_graph(query): Buscar variable. Ej: search_graph("fecha")
+2. detect_standard(column_name, sample_values): Detectar estandar. Ej: detect_standard("fecha_nac", ["1990-01-01"])
+3. validate_interop(source_db, target_db): Verificar interoperabilidad entre fuentes. Ej: validate_interop("sample_censo", "sample_hospital")
+4. generate_transform(source_db, target_db): Generar transformaciones SQL. Ej: generate_transform("sample_censo", "sample_hospital")
+5. get_classifier(standard_id): Ver valores validos. Ej: get_classifier("ISO_8601")
+6. list_concepts(): Listar todos los conceptos. Sin argumentos.
+7. get_composites(concept_name): Ver componentes. Ej: get_composites("fecha")
+8. get_contexts(concept_name): Ver contextos. Ej: get_contexts("sexo")
+9. find_conflicts(): Detectar conflictos de contexto. Sin argumentos.
 
-FORMATO ReAct:
-THOUGHT: <razonamiento>
-ACTION: <tool>
-ACTION_INPUT: <json>
+FORMATO OBLIGATORIO - responde EXACTAMENTE asi:
 
-Para finalizar:
-THOUGHT: <razonamiento final>
-FINAL: <analisis tecnico de la consulta>
+THOUGHT: Necesito validar la interoperabilidad entre las dos fuentes
+ACTION: validate_interop
+ACTION_INPUT: {"source_db": "sample_censo", "target_db": "sample_hospital"}
+
+Despues de recibir la observacion, puedes encadenar mas tools:
+
+THOUGHT: Encontre conflictos. Debo ver los conceptos para analizar
+ACTION: list_concepts
+ACTION_INPUT: {}
+
+Cuando tengas suficiente informacion, finaliza asi:
+
+THOUGHT: He analizado la interoperabilidad entre las fuentes
+FINAL: <tu analisis tecnico basado en lo que devolvieron las tools>
 VEREDICTO: {"can_proceed": true/false, "objection_type": "technical|none", "reason": "..."}
 
-Responde en español. Sé especifico sobre estandares, transformaciones y compatibilidad.
-El VEREDICTO es OBLIGATORIO: can_proceed=false si hay objecion tecnica insalvable, true si es viable.
+IMPORTANTE:
+- NUNCA inventes nombres de variables. Usa lo que devuelven las tools.
+- Si validate_interop devuelve caminos con "fecha" y "sexo", analiza esos.
+- Responde en español.
+- El VEREDICTO es OBLIGATORIO.
 """
 
 ESTADISTICO_PROMPT = """Eres un agente ESTADISTICO especializado en calidad de datos.
-Tu perspectiva es ESTADISTICA y de CALIDAD. Analizas:
+Tu perspectiva es ESTADISTICA y de CALIDAD.
 
-- Poblacion: la variable aplica a toda la poblacion o un subconjunto?
-- Metodologia: como se captura el dato? Auto-reporte? Observacion clinica?
-- Calidad: hay valores faltantes, outliers, inconsistencias?
-- Sesgos: la variable puede tener sesgo de seleccion o medicion?
-- Contextos: la variable significa lo mismo en todas las fuentes?
-- Conflictos: hay conflictos de contexto entre fuentes?
+REGLA #1: NUNCA des una respuesta final sin antes haber llamado al menos una tool.
+Si no has llamado ninguna tool, tu primera respuesta DEBE ser una accion.
 
 Tools disponibles:
-1. search_graph(query): Buscar variable en el nomenclador
-2. list_concepts(): Listar todos los conceptos
-3. get_contexts(concept_name): Ver significados contextuales
-4. find_conflicts(): Detectar conflictos de contexto
-5. get_lifecycle(concept_name): Ver historial de cambios
-6. version_info(): Ver version del nomenclador
+1. search_graph(query): Buscar variable. Ej: search_graph("sexo")
+2. list_concepts(): Listar todos los conceptos. Sin argumentos.
+3. get_contexts(concept_name): Ver significados contextuales. Ej: get_contexts("sexo")
+4. find_conflicts(): Detectar conflictos de contexto. Sin argumentos.
+5. get_lifecycle(concept_name): Ver historial de cambios. Ej: get_lifecycle("fecha")
+6. version_info(): Ver version del nomenclador. Sin argumentos.
 
-FORMATO ReAct:
-THOUGHT: <razonamiento>
-ACTION: <tool>
-ACTION_INPUT: <json>
+FORMATO OBLIGATORIO - responde EXACTAMENTE asi:
 
-Para finalizar:
-THOUGHT: <razonamiento final>
-FINAL: <analisis estadistico de la consulta>
+THOUGHT: Necesito ver los conceptos disponibles y detectar conflictos
+ACTION: find_conflicts
+ACTION_INPUT: {}
 
-Responde en español. Sé especifico sobre poblacion, metodologia, sesgos y calidad.
+Despues de recibir la observacion, puedes encadenar mas tools:
+
+THOUGHT: Encontre conflictos. Debo ver los contextos de sexo
+ACTION: get_contexts
+ACTION_INPUT: {"concept_name": "sexo"}
+
+Cuando tengas suficiente informacion, finaliza asi:
+
+THOUGHT: He analizado los conflictos y contextos
+FINAL: <tu analisis estadistico basado en lo que devolvieron las tools>
+
+IMPORTANTE:
+- NUNCA inventes nombres de variables. Usa lo que devuelven las tools.
+- Si find_conflicts devuelve conflictos en "sexo", analiza "sexo".
+- Responde en español.
 """
 
 SINTETIZADOR_PROMPT = """Eres un SINTETIZADOR de un sistema MoA (Mixture of Agents).
@@ -336,9 +358,27 @@ def _run_single_agent(
     for iteration in range(max_iterations):
         scratchpad_text = "\n".join(scratchpad) if scratchpad else "(sin acciones previas)"
 
+        if iteration == 0:
+            user_content = f"""Consulta: {query}
+
+Historial:
+(sin acciones previas)
+
+Debes empezar llamando una tool. Responde con el formato:
+THOUGHT: <tu razonamiento>
+ACTION: <nombre de la tool>
+ACTION_INPUT: <json con argumentos>"""
+        else:
+            user_content = f"""Consulta: {query}
+
+Historial:
+{scratchpad_text}
+
+Continua. Si ya tienes suficiente informacion, finaliza con FINAL:. Si necesitas mas datos, llama otra tool con el mismo formato THOUGHT/ACTION/ACTION_INPUT."""
+
         messages = [
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": f"Consulta: {query}\n\nHistorial:\n{scratchpad_text}\n\nQue haces ahora?"},
+            {"role": "user", "content": user_content},
         ]
 
         try:
@@ -355,27 +395,57 @@ def _run_single_agent(
         action_input_raw = parsed.get("action_input", "").strip()
 
         if not action:
+            if iteration == 0:
+                scratchpad.append(f"NOTA: Tu respuesta anterior no tenia formato ACTION. Debes usar el formato THOUGHT/ACTION/ACTION_INPUT. Tu respuesta fue: {response[:200]}")
+                continue
             return f"[{name}] No pudo determinar accion. {parsed.get('thought', '')}"
 
         # Ejecutar tool
         if action not in tools:
-            result = f"Error: tool '{action}' no disponible. Tools: {', '.join(tools.keys())}"
+            result = f"Error: tool '{action}' no disponible. Tools disponibles: {', '.join(tools.keys())}"
         else:
+            tool_fn = tools[action]
             try:
                 args = json.loads(action_input_raw) if action_input_raw else {}
-                result = tools[action](**args) if args else tools[action]()
+                result = tool_fn(**args) if args else tool_fn()
             except json.JSONDecodeError:
-                args = {"query": action_input_raw} if action_input_raw else {}
-                try:
-                    result = tools[action](**args) if args else tools[action]()
-                except Exception as e:
+                # Fallback: detectar primer parametro de la tool via inspect
+                import inspect as _inspect
+                sig = _inspect.signature(tool_fn)
+                params = list(sig.parameters.keys())
+                if params:
+                    args = {params[0]: action_input_raw} if action_input_raw else {}
+                    try:
+                        result = tool_fn(**args) if args else tool_fn()
+                    except Exception as e:
+                        log.warning("[%s] tool %r fallo: %s", name, action, e)
+                        result = f"Error: {e}"
+                else:
+                    try:
+                        result = tool_fn()
+                    except Exception as e:
+                        log.warning("[%s] tool %r fallo: %s", name, action, e)
+                        result = f"Error: {e}"
+            except TypeError as e:
+                # kwargs incorrectos - intentar con primer parametro
+                import inspect as _inspect
+                sig = _inspect.signature(tool_fn)
+                params = list(sig.parameters.keys())
+                if params and "query" in args and params[0] != "query":
+                    args = {params[0]: args["query"]}
+                    try:
+                        result = tool_fn(**args)
+                    except Exception as e2:
+                        log.warning("[%s] tool %r fallo: %s", name, action, e2)
+                        result = f"Error: {e2}"
+                else:
                     log.warning("[%s] tool %r fallo: %s", name, action, e)
-                    result = f"Error: {e}"
+                    result = f"Error: {e}. Argumentos esperados: {params}"
             except Exception as e:
                 log.warning("[%s] tool %r fallo: %s", name, action, e)
                 result = f"Error: {e}"
 
-        scratchpad.append(f"THOUGHT: {parsed.get('thought', '')}\nACTION: {action}\nOBSERVATION: {result[:400]}")
+        scratchpad.append(f"THOUGHT: {parsed.get('thought', '')}\nACTION: {action}\nACTION_INPUT: {action_input_raw}\nOBSERVATION: {result[:500]}")
 
     return f"[{name}] Alcanzo el limite de iteraciones. Ultimo pensamiento: {parsed.get('thought', 'N/A')}"
 
@@ -500,20 +570,18 @@ Ahora sintetiza las 3 perspectivas en una respuesta unificada."""
 
 # === PUNTO DE ENTRADA ===
 
-def run_moa(query: str, max_iterations: int = 5) -> dict:
+def run_moa(query: str, max_iterations: int = 5, parallel: bool = False) -> dict:
     """
-    Ejecutar MoA: 3 agentes especializados en paralelo + sintetizador.
+    Ejecutar MoA: 3 agentes especializados + sintetizador.
 
-    Los 3 agentes (Juridico, Tecnico, Estadistico) son independientes
-    y se ejecutan en paralelo con ThreadPoolExecutor. El sintetizador
-    espera a que todos terminen antes de combinar las perspectivas.
+    Por defecto los 3 agentes corren SECUENCIAL para evitar saturar el rate limit
+    del LLM. Si parallel=True, usa ThreadPoolExecutor (mas rapido pero puede
+    provocar 429 en free tiers).
 
     Returns:
         dict con: final_answer, juridico, tecnico, estadistico
     """
     from concurrent.futures import ThreadPoolExecutor, as_completed
-
-    log.info("Iniciando 3 agentes especializados en paralelo...")
 
     agents = {
         "JURIDICO": (JURIDICO_PROMPT, JURIDICO_TOOLS),
@@ -523,25 +591,37 @@ def run_moa(query: str, max_iterations: int = 5) -> dict:
 
     results = {}
 
-    with ThreadPoolExecutor(max_workers=3) as pool:
-        futures = {
-            name: pool.submit(
-                _run_single_agent,
-                name, prompt, tools, query, max_iterations,
-            )
-            for name, (prompt, tools) in agents.items()
-        }
+    if parallel:
+        log.info("Iniciando 3 agentes especializados en paralelo...")
+        with ThreadPoolExecutor(max_workers=3) as pool:
+            futures = {
+                name: pool.submit(
+                    _run_single_agent,
+                    name, prompt, tools, query, max_iterations,
+                )
+                for name, (prompt, tools) in agents.items()
+            }
 
-        future_to_name = {f: n for n, f in futures.items()}
-        for future in as_completed(future_to_name.keys()):
-            name_str = future_to_name[future]
+            future_to_name = {f: n for n, f in futures.items()}
+            for future in as_completed(future_to_name.keys()):
+                name_str = future_to_name[future]
+                try:
+                    output = future.result()
+                    results[name_str] = output
+                    log.info("%s listo (%d chars)", name_str, len(output))
+                except Exception as e:
+                    results[name_str] = f"[{name_str}] Error: {e}"
+                    log.error("%s fallo: %s", name_str, e)
+    else:
+        log.info("Iniciando 3 agentes especializados secuencial...")
+        for name, (prompt, tools) in agents.items():
             try:
-                output = future.result()
-                results[name_str] = output
-                log.info("%s listo (%d chars)", name_str, len(output))
+                output = _run_single_agent(name, prompt, tools, query, max_iterations)
+                results[name] = output
+                log.info("%s listo (%d chars)", name, len(output))
             except Exception as e:
-                results[name_str] = f"[{name_str}] Error: {e}"
-                log.error("%s fallo: %s", name_str, e)
+                results[name] = f"[{name}] Error: {e}"
+                log.error("%s fallo: %s", name, e)
 
     juridico = results.get("JURIDICO", "")
     tecnico = results.get("TECNICO", "")

@@ -27,6 +27,7 @@ class NodeType(str, Enum):
     NORMATIVE = "normative"
     ANONYMIZATION = "anonymization"
     QUALITY_ISSUE = "quality_issue"
+    INSIGHT = "insight"
 
 
 class EdgeType(str, Enum):
@@ -39,10 +40,11 @@ class EdgeType(str, Enum):
     DERIVA_DE = "deriva_de"             # Concept -> Concept
     RESPALDADO_POR = "respaldado_por"   # Concept -> NormativeDocument
     APLICA_ANONIMIZACION = "aplica_anonimizacion"  # Concept/Field -> AnonymizationRule
-    EQUIVALE_A = "equivalente_a"        # Classifier -> Classifier (mapeo entre versiones)
+    EQUIVALE_A = "equivalente_a"        # Classifier -> Classifier (mapeo entre versiones) o Field -> Field (equivalencia descubierta)
     SUBCONCEPTO_DE = "subconcepto_de"   # Classifier -> Classifier (jerarquia)
     TIENE_ISSUE = "tiene_issue"         # Field -> QualityIssue
     TIENE_CONTEXTO = "tiene_contexto"   # Concept -> Context
+    GENERATES_INSIGHT = "generates_insight"  # Source -> Insight
 
 
 class DataClassification(str, Enum):
@@ -225,3 +227,21 @@ class QualityIssueNode(BaseModel):
     metric_value: float = 0.0  # valor cuantitativo (ej: 0.78 para 78% nulos)
     detected_at: str = ""     # timestamp de deteccion
     detected_by: str = ""     # rag_factory | profiler | agent | manual
+
+
+class InsightNode(BaseModel):
+    """Insight acumulado de una fuente de datos.
+
+    Observaciones analiticas sobre los datos de una fuente que se guardan
+    en el grafo para combinarse con insights de otras fuentes en discover.
+    Se eliminan en cascada cuando la fuente se elimina.
+    """
+    id: str
+    type: str = NodeType.INSIGHT.value
+    source_id: str = ""           # source:hospital, source:unicef, etc.
+    domain: str = ""              # salud, educacion, agricultura
+    observation: str = ""         # descripcion del hallazgo
+    variables_covered: list[str] = Field(default_factory=list)  # nombres de conceptos cubiertos
+    quality_snapshot: dict = Field(default_factory=dict)  # {avg_qs, field_count, low_quality_count}
+    cross_source_potential: str = ""  # que variables permiten correlacionar con otras fuentes
+    created_at: str = ""          # ISO timestamp

@@ -30,11 +30,11 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 from .standards import detect_standard, STANDARDS, get_standard_values
-from .graph.catalog import NomencladorGraph
+from .graph.catalog import NomencladorGraph, load_graph_cached, clear_graph_cache
 from .graph.schema import (
     ConceptNode, FieldNode, ClassifierNode, SourceNode, EdgeType,
 )
-from .groq_client import call_groq
+from .llm_client import call_groq
 from .inference import infer_semantic_type
 
 logger = logging.getLogger(__name__)
@@ -604,10 +604,14 @@ def match_with_llm(col: RawColumn, existing_concepts: list[str]) -> dict:
             max_tokens=200,
             json_mode=True,
         )
-        # Parsear respuesta JSON
-        json_match = re.search(r'\{[^}]+\}', response)
+        # Parsear respuesta JSON — usar regex greedy para capturar JSON anidado
+        json_match = re.search(r'\{.*\}', response, re.DOTALL)
         if json_match:
-            result = json.loads(json_match.group())
+            try:
+                result = json.loads(json_match.group())
+            except json.JSONDecodeError:
+                # Fallback: intentar extraer el primer objeto JSON valido
+                result = {"concept": None, "standard": None, "confidence": "low", "reason": "JSON no parseable"}
             result["method"] = "llm_groq"
             result["column"] = col.clean_name
             return result
@@ -654,11 +658,8 @@ def create_ingestion_plan(
             issues_found=["No se pudieron extraer columnas del archivo"],
         )
 
-    # Cargar conceptos existentes del nomenclador
-    nomenclador_path = Path(__file__).parent.parent / "nomenclador" / "nomenclador.json"
-    g = NomencladorGraph()
-    if nomenclador_path.exists():
-        g.load(str(nomenclador_path))
+    # Cargar conceptos existentes del nomenclador (usar cache para reuso de conexion)
+    g = load_graph_cached()
     existing_concepts = g.list_concepts()
 
     # Fase 3: Clean + detect issues
@@ -732,9 +733,7 @@ def execute_ingestion_plan(plan: IngestionPlan, auto_confirm: bool = False) -> s
     Solo se ejecuta despues de que el humano aprueba (o si auto_confirm=True).
     """
     nomenclador_path = Path(__file__).parent.parent / "nomenclador" / "nomenclador.json"
-    g = NomencladorGraph()
-    if nomenclador_path.exists():
-        g.load(str(nomenclador_path))
+    g = load_graph_cached()
 
     # Registrar fuente
     source_id = f"source:{plan.source_name}"

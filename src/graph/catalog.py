@@ -9,6 +9,7 @@ Knowledge Graph del Nomenclador usando NetworkX.
 import json
 import logging
 import os
+import threading
 from pathlib import Path
 from typing import Optional
 
@@ -23,6 +24,7 @@ from .schema import (
     NormativeNode, AnonymizationRuleNode,
     DataClassification, ReviewStatus,
     QualityIssueNode, IssueSeverity,
+    InsightNode,
 )
 
 
@@ -42,6 +44,17 @@ def _get_db_connection():
     except Exception as e:
         logger.warning("PostgreSQL connection fallo: %s — usando modo JSON fallback", e)
         return None
+
+
+def g_has_equivala_edge(graph, node_a: str, node_b: str) -> bool:
+    """Check if an EQUIVALE_A edge exists between two nodes in either direction."""
+    if graph.has_edge(node_a, node_b):
+        if graph.get_edge_data(node_a, node_b).get("type") == EdgeType.EQUIVALE_A.value:
+            return True
+    if graph.has_edge(node_b, node_a):
+        if graph.get_edge_data(node_b, node_a).get("type") == EdgeType.EQUIVALE_A.value:
+            return True
+    return False
 
 
 class NomencladorGraph:
@@ -98,6 +111,38 @@ class NomencladorGraph:
             except Exception:
                 pass
 
+    def _db_batch_upsert(self, nodes: list[tuple[str, dict]], edges: list[tuple[str, str, str, dict]]):
+        """Persistir multiples nodos y aristas en una sola transaccion (Gap B).
+
+        Args:
+            nodes: lista de (node_id, node_data)
+            edges: lista de (source, target, edge_type, edge_data)
+        """
+        if not self._db:
+            return
+        try:
+            with self._db.cursor() as cur:
+                for node_id, node_data in nodes:
+                    node_type = node_data.get("type", "concept")
+                    cur.execute(
+                        "INSERT INTO governance.graph_nodes (id, type, data) VALUES (%s, %s, %s) "
+                        "ON CONFLICT (id) DO UPDATE SET type = EXCLUDED.type, data = EXCLUDED.data",
+                        (node_id, node_type, json.dumps(node_data, ensure_ascii=False, default=str))
+                    )
+                for source, target, edge_type, edge_data in edges:
+                    cur.execute(
+                        "INSERT INTO governance.graph_edges (source_id, target_id, type, data) VALUES (%s, %s, %s, %s) "
+                        "ON CONFLICT (source_id, target_id, type) DO UPDATE SET data = EXCLUDED.data",
+                        (source, target, edge_type, json.dumps(edge_data or {}, ensure_ascii=False, default=str))
+                    )
+            self._db.commit()
+        except Exception as e:
+            logger.warning("PostgreSQL batch_upsert fallo: %s", e)
+            try:
+                self._db.rollback()
+            except Exception:
+                pass
+
     def _db_delete_node(self, node_id: str):
         """Eliminar nodo de PostgreSQL (Gap B)."""
         if not self._db:
@@ -108,6 +153,27 @@ class NomencladorGraph:
             self._db.commit()
         except Exception as e:
             logger.warning("PostgreSQL delete_node fallo para %s: %s", node_id, e)
+            try:
+                self._db.rollback()
+            except Exception:
+                pass
+
+    def clear_db_graph(self):
+        """Eliminar todos los nodos y aristas de PostgreSQL.
+
+        Util cuando se reconstruye el grafo desde cero para evitar
+        datos stale de runs anteriores.
+        """
+        if not self._db:
+            return
+        try:
+            with self._db.cursor() as cur:
+                cur.execute("DELETE FROM governance.graph_edges")
+                cur.execute("DELETE FROM governance.graph_nodes")
+            self._db.commit()
+            logger.info("PostgreSQL: grafo limpiado (nodos y aristas eliminados)")
+        except Exception as e:
+            logger.warning("PostgreSQL clear_db_graph fallo: %s", e)
             try:
                 self._db.rollback()
             except Exception:
@@ -542,8 +608,10 @@ class NomencladorGraph:
         ]
 
         results = []
+        seen_paths = set()
         for sf in source_fields:
             for tf in target_fields:
+                # Path 1: Shared concept via IMPLEMENTA
                 for successor in self.graph.successors(sf):
                     edge = self.graph.get_edge_data(sf, successor)
                     if edge and edge.get("type") == EdgeType.IMPLEMENTA.value:
@@ -553,6 +621,10 @@ class NomencladorGraph:
                             continue
                         for target_pred in self.graph.predecessors(successor):
                             if target_pred == tf:
+                                path_key = (sf, successor, tf)
+                                if path_key in seen_paths:
+                                    continue
+                                seen_paths.add(path_key)
                                 concept_data = {"id": successor, **self.graph.nodes[successor]}
                                 field_a_data = {"id": sf, **self.graph.nodes[sf]}
                                 field_b_data = {"id": tf, **self.graph.nodes[tf]}
@@ -571,7 +643,34 @@ class NomencladorGraph:
                                     "field_b": field_b_data,
                                     "concept": concept_data,
                                     "classifier": classifier_data,
+                                    "match_type": "shared_concept",
                                 })
+
+                # Path 2: Direct EQUIVALE_A edge between fields
+                if g_has_equivala_edge(self.graph, sf, tf):
+                    path_key = (sf, "EQUIVALE_A", tf)
+                    if path_key in seen_paths:
+                        continue
+                    seen_paths.add(path_key)
+                    edge_data = self.graph.get_edge_data(sf, tf) or self.graph.get_edge_data(tf, sf)
+                    field_a_data = {"id": sf, **self.graph.nodes[sf]}
+                    field_b_data = {"id": tf, **self.graph.nodes[tf]}
+                    # Find concept for field_a
+                    concept_data = None
+                    for successor in self.graph.successors(sf):
+                        e = self.graph.get_edge_data(sf, successor)
+                        if e and e.get("type") == EdgeType.IMPLEMENTA.value:
+                            concept_data = {"id": successor, **self.graph.nodes[successor]}
+                            break
+                    results.append({
+                        "path": [sf, tf],
+                        "field_a": field_a_data,
+                        "field_b": field_b_data,
+                        "concept": concept_data,
+                        "classifier": None,
+                        "match_type": "value_equivalence",
+                        "confidence": edge_data.get("confidence", 0.0) if edge_data else 0.0,
+                    })
         return results
 
     def list_concepts(self, include_proposed: bool = False) -> list[dict]:
@@ -881,6 +980,84 @@ class NomencladorGraph:
             "issues_by_severity": issues_by_severity,
         }
 
+    # === INSIGHTS ACUMULADOS ===
+
+    def add_insight(self, node: InsightNode):
+        """Agregar un insight al grafo, vinculado a su fuente."""
+        data = node.model_dump()
+        self.graph.add_node(node.id, **data)
+        self._db_upsert_node(node.id, data)
+        if node.source_id and node.source_id in self.graph:
+            self.graph.add_edge(node.source_id, node.id, type=EdgeType.GENERATES_INSIGHT.value)
+            self._db_upsert_edge(node.source_id, node.id, EdgeType.GENERATES_INSIGHT.value)
+
+    def find_insights(self, domain: Optional[str] = None) -> list[dict]:
+        """Listar todos los insights acumulados, opcionalmente filtrados por dominio."""
+        results = []
+        for node_id, data in self.graph.nodes(data=True):
+            if data.get("type") == NodeType.INSIGHT.value:
+                if domain and data.get("domain") != domain:
+                    continue
+                results.append({"id": node_id, **data})
+        return results
+
+    def find_insights_of_source(self, source_id: str) -> list[dict]:
+        """Listar insights generados por una fuente especifica."""
+        results = []
+        for successor in self.graph.successors(source_id):
+            edge_data = self.graph.get_edge_data(source_id, successor)
+            if edge_data and edge_data.get("type") == EdgeType.GENERATES_INSIGHT.value:
+                node_data = self.graph.nodes[successor]
+                results.append({"id": successor, **node_data})
+        return results
+
+    def delete_insights_of_source(self, source_id: str) -> int:
+        """Eliminar todos los insights de una fuente (cascada al borrar fuente).
+
+        Returns numero de insights eliminados.
+        """
+        insights = self.find_insights_of_source(source_id)
+        count = 0
+        for insight in insights:
+            insight_id = insight["id"]
+            self.graph.remove_node(insight_id)
+            self._db_delete_node(insight_id)
+            count += 1
+        return count
+
+    def delete_source(self, source_id: str) -> int:
+        """Eliminar una fuente y todos sus insights en cascada.
+
+        Tambien elimina los fields que provienen de esa fuente.
+        Returns numero total de nodos eliminados.
+        """
+        if source_id not in self.graph:
+            return 0
+
+        # Eliminar insights primero
+        insights_deleted = self.delete_insights_of_source(source_id)
+
+        # Eliminar fields vinculados a esta fuente
+        fields_to_delete = []
+        for node_id, data in self.graph.nodes(data=True):
+            if data.get("type") == NodeType.FIELD.value:
+                # Verificar si el field tiene arista PROVIENE_DE hacia este source
+                for successor in self.graph.successors(node_id):
+                    edge = self.graph.get_edge_data(node_id, successor)
+                    if edge and edge.get("type") == EdgeType.PROVIENE_DE.value and successor == source_id:
+                        fields_to_delete.append(node_id)
+                        break
+
+        for field_id in fields_to_delete:
+            self.graph.remove_node(field_id)
+            self._db_delete_node(field_id)
+
+        # Eliminar el source
+        self.graph.remove_node(source_id)
+        self._db_delete_node(source_id)
+
+        return insights_deleted + len(fields_to_delete) + 1
+
     # === STALENESS TRACKING ===
 
     def touch_concept(self, concept_id: str, verified_date: str = ""):
@@ -1165,6 +1342,219 @@ class NomencladorGraph:
         except Exception as e:
             logger.warning("Merge desde disco fallo: %s — continuando con grafo en memoria", e)
 
+    # === COMMUNITY DETECTION (inspirado en GraphRAG) ===
+
+    def detect_communities(self, resolution: float = 1.0) -> list[dict]:
+        """Detectar comunidades de conceptos relacionados usando Louvain.
+
+        Usa el algoritmo de Louvain (networkx.community) sobre el grafo
+        no dirigido de conceptos + fields + classifiers para agrupar
+        nodos que estan densamente conectados entre si.
+
+        Args:
+            resolution: parametro de resolucion de Louvain. Valores altos
+                        detectan comunidades mas pequenas. Default 1.0.
+
+        Returns:
+            Lista de dicts con: community_id, size, members (lista de node_ids),
+            member_names (lista de nombres), dominant_type (tipo mas frecuente).
+        """
+        if self.graph.number_of_nodes() == 0:
+            return []
+
+        # Convertir a no dirigido para Louvain (ignora direccion de aristas)
+        undirected = self.graph.to_undirected()
+
+        # Solo considerar nodos principales (concept, field, classifier)
+        main_types = {NodeType.CONCEPT.value, NodeType.FIELD.value, NodeType.CLASSIFIER.value}
+        subgraph = undirected.subgraph([
+            n for n, d in undirected.nodes(data=True)
+            if d.get("type") in main_types
+        ])
+
+        if subgraph.number_of_nodes() == 0:
+            return []
+
+        try:
+            import networkx.algorithms.community as nx_comm
+            communities = nx_comm.louvain_communities(subgraph, resolution=resolution, seed=42)
+        except Exception as e:
+            logger.warning("Louvain fallo: %s — usando connected components", e)
+            communities = [
+                set(c) for c in nx.connected_components(subgraph)
+            ]
+
+        results = []
+        for i, community in enumerate(communities):
+            if len(community) < 2:
+                continue
+            members = list(community)
+            types = [self.graph.nodes[m].get("type", "?") for m in members]
+            names = [self.graph.nodes[m].get("name", m) for m in members]
+            dominant_type = max(set(types), key=types.count) if types else "?"
+            results.append({
+                "community_id": i,
+                "size": len(members),
+                "members": members,
+                "member_names": names,
+                "dominant_type": dominant_type,
+            })
+
+        results.sort(key=lambda x: x["size"], reverse=True)
+        # Reasignar IDs despues de ordenar
+        for i, r in enumerate(results):
+            r["community_id"] = i
+
+        return results
+
+    def get_community_context(self, members: list[str]) -> str:
+        """Construir un texto descriptivo de una comunidad para enviar al LLM.
+
+        Incluye nombre, tipo, definicion y conexiones de cada miembro.
+        """
+        lines = []
+        for member_id in members:
+            node = self.graph.nodes.get(member_id, {})
+            name = node.get("name", member_id)
+            ntype = node.get("type", "?")
+            definition = node.get("definition", "")
+            standard = node.get("standard", "")
+
+            # Conexiones dentro de la comunidad
+            connections = []
+            for _, target, data in self.graph.out_edges(member_id, data=True):
+                if target in members:
+                    target_name = self.graph.nodes[target].get("name", target)
+                    edge_type = data.get("type", "?")
+                    connections.append(f"{edge_type}->{target_name}")
+            for source, _, data in self.graph.in_edges(member_id, data=True):
+                if source in members:
+                    source_name = self.graph.nodes[source].get("name", source)
+                    edge_type = data.get("type", "?")
+                    connections.append(f"{source_name}->{edge_type}")
+
+            line = f"- [{ntype}] {name}"
+            if definition:
+                line += f": {definition[:120]}"
+            if standard:
+                line += f" (estandar: {standard})"
+            if connections:
+                line += f" | conexiones: {', '.join(connections[:5])}"
+            lines.append(line)
+
+        return "\n".join(lines)
+
+    def generate_community_report(self, community: dict) -> str:
+        """Generar un resumen narrativo de una comunidad usando Groq.
+
+        Emula el 'community report' de GraphRAG: el LLM recibe la lista
+        de miembros de la comunidad con sus conexiones y genera un
+        parrafo descriptivo del area tematica que cubren.
+
+        Args:
+            community: dict con members, member_names, dominant_type, etc.
+
+        Returns:
+            Texto con el resumen generado por el LLM.
+        """
+        from ..groq_client import call_groq
+
+        context = self.get_community_context(community["members"])
+        member_names = ", ".join(community["member_names"][:15])
+
+        prompt = f"""Eres un analista de datos institucionales. Se te presenta un grupo de variables relacionadas (una "comunidad" del nomenclador). Genera un resumen conciso (3-5 lineas) del area tematica que cubren estas variables y como se relacionan entre si.
+
+Variables en la comunidad ({community['size']} nodos, tipo dominante: {community['dominant_type']}):
+{member_names}
+
+Detalle de conexiones:
+{context}
+
+Genera SOLO el resumen, sin prefijo ni etiquetas. En español."""
+
+        try:
+            report = call_groq(
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.3,
+                max_tokens=500,
+            )
+            return report.strip()
+        except Exception as e:
+            logger.warning("Community report fallo: %s", e)
+            return f"Comunidad de {community['size']} {community['dominant_type']}s: {member_names}"
+
+    def get_community_reports(self, resolution: float = 1.0) -> list[dict]:
+        """Detectar comunidades y generar reportes para cada una con Groq.
+
+        Proceso completo (emula GraphRAG community summarization):
+        1. Detecta comunidades con Louvain
+        2. Para cada comunidad, genera un resumen narrativo con LLM
+
+        Returns:
+            Lista de dicts con: community_id, size, member_names,
+            dominant_type, report (texto generado por LLM).
+        """
+        communities = self.detect_communities(resolution=resolution)
+        reports = []
+        for community in communities:
+            report_text = self.generate_community_report(community)
+            reports.append({
+                "community_id": community["community_id"],
+                "size": community["size"],
+                "member_names": community["member_names"],
+                "dominant_type": community["dominant_type"],
+                "report": report_text,
+            })
+        return reports
+
+    def global_search(self, query: str, resolution: float = 1.0) -> str:
+        """Busqueda global: map-reduce sobre community reports (emula GraphRAG Global Search).
+
+        1. Detecta comunidades y genera reportes
+        2. Envia todos los reportes al LLM con la query del usuario
+        3. El LLM sintetiza una respuesta global
+
+        Args:
+            query: pregunta global del usuario (ej: "que areas tematicas cubre el nomenclador?")
+            resolution: parametro de Louvain
+
+        Returns:
+            Respuesta sintetizada del LLM.
+        """
+        from ..groq_client import call_groq
+
+        reports = self.get_community_reports(resolution=resolution)
+        if not reports:
+            return "No hay suficientes nodos en el grafo para detectar comunidades."
+
+        reports_text = "\n\n".join([
+            f"Comunidad {r['community_id']} ({r['size']} nodos, {r['dominant_type']}):\n{r['report']}"
+            for r in reports
+        ])
+
+        prompt = f"""Eres un analista de governance de datos. Se te presenta un nomenclador institucional organizado en comunidades tematicas. Cada comunidad tiene un resumen generado por IA.
+
+Responde la pregunta del usuario basandote en los resumenes de las comunidades.
+
+COMUNIDADES DEL NOMENCLADOR ({len(reports)} comunidades):
+{reports_text}
+
+PREGUNTA DEL USUARIO:
+{query}
+
+Responde en español, de forma concisa pero completa. Estructura tu respuesta con bullet points si es apropiado."""
+
+        try:
+            response = call_groq(
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.3,
+                max_tokens=2000,
+            )
+            return response.strip()
+        except Exception as e:
+            logger.warning("Global search fallo: %s", e)
+            return f"Error en global search: {e}. Comunidades detectadas: {len(reports)}."
+
     # === ESTADÍSTICAS ===
 
     def stats(self) -> dict:
@@ -1185,6 +1575,7 @@ class NomencladorGraph:
 
 _GRAPH_CACHE: NomencladorGraph | None = None
 _GRAPH_CACHE_MTIME: float = 0.0
+_GRAPH_LOCK = threading.Lock()
 _NOMENCLADOR_PATH = Path(__file__).parent.parent.parent / "nomenclador" / "nomenclador.json"
 
 
@@ -1192,26 +1583,28 @@ def load_graph_cached() -> NomencladorGraph:
     """Cargar el grafo con cache de lectura. Funcion publica para reuso.
 
     Invalida automaticamente el cache si el archivo nomenclador.json
-    fue modificado en disco (por mtime).
+    fue modificado en disco (por mtime). Thread-safe via lock.
     """
     global _GRAPH_CACHE, _GRAPH_CACHE_MTIME
-    if _GRAPH_CACHE is not None:
-        if _NOMENCLADOR_PATH.exists():
-            current_mtime = _NOMENCLADOR_PATH.stat().st_mtime
-            if current_mtime != _GRAPH_CACHE_MTIME:
-                _GRAPH_CACHE = None
+    with _GRAPH_LOCK:
         if _GRAPH_CACHE is not None:
-            return _GRAPH_CACHE
-    g = NomencladorGraph()
-    if _NOMENCLADOR_PATH.exists():
-        g.load(str(_NOMENCLADOR_PATH))
-        _GRAPH_CACHE_MTIME = _NOMENCLADOR_PATH.stat().st_mtime
-    _GRAPH_CACHE = g
-    return g
+            if _NOMENCLADOR_PATH.exists():
+                current_mtime = _NOMENCLADOR_PATH.stat().st_mtime
+                if current_mtime != _GRAPH_CACHE_MTIME:
+                    _GRAPH_CACHE = None
+            if _GRAPH_CACHE is not None:
+                return _GRAPH_CACHE
+        g = NomencladorGraph()
+        if _NOMENCLADOR_PATH.exists():
+            g.load(str(_NOMENCLADOR_PATH))
+            _GRAPH_CACHE_MTIME = _NOMENCLADOR_PATH.stat().st_mtime
+        _GRAPH_CACHE = g
+        return g
 
 
 def clear_graph_cache():
     """Invalidar el cache del grafo. Llamar despues de modificar el nomenclador."""
     global _GRAPH_CACHE, _GRAPH_CACHE_MTIME
-    _GRAPH_CACHE = None
-    _GRAPH_CACHE_MTIME = 0.0
+    with _GRAPH_LOCK:
+        _GRAPH_CACHE = None
+        _GRAPH_CACHE_MTIME = 0.0

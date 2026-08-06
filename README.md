@@ -1,325 +1,340 @@
-# Governance Agent — Nomenclador Institucional
+# Governance Agent
 
-Agente de governance para interoperabilidad semantica entre sistemas de informacion.
-Construye un nomenclador institucional usando un knowledge graph (NetworkX + PostgreSQL),
-con agentes ReAct y MoA (Mixture of Agents) para razonamiento semantico, legal y estadistico,
-y un motor de inferencia semantica que resuelve ~33% de columnas sin usar LLM.
+**Calidad de datos con IA para apoyar la gestión pública**
+
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
+[![Python 3.11+](https://img.shields.io/badge/Python-3.11+-blue.svg)](https://www.python.org/downloads/)
+[![Status: Activo](https://img.shields.io/badge/Status-Activo-green.svg)]()
+
+---
+
+## Tabla de contenidos
+
+- [Descripción](#descripción)
+- [El problema](#el-problema)
+- [Cómo funciona](#cómo-funciona)
+- [Arquitectura](#arquitectura)
+- [Instalación](#instalación)
+- [Uso rápido](#uso-rápido)
+- [Domain Packs](#domain-packs)
+- [Casos de uso](#casos-de-uso)
+- [Roadmap](#roadmap)
+- [Contribuir](#contribuir)
+- [Licencia](#licencia)
+
+---
+
+## Descripción
+
+Governance Agent es un framework de código abierto que asegura la calidad de los datos como insumo para la gestión pública. Cada ministerio o institución encapsula su nomenclador, reglas y validadores en un *Domain Pack* intercambiable. Cuando la institución consolida datos de sus sistemas para planificar o evaluar, Governance Agent valida que sean estructuralmente correctos, semánticamente consistentes mediante IA, y coherentes con el clasificador de variables del dominio.
+
+Si hay errores, el agente los corrige automáticamente. Si no puede, pregunta al planificador sin detener el proceso. Y aprende de cada corrección para no repetir errores.
+
+**¿Por qué?** Porque las decisiones de política pública —desde el diseño de un subsidio hasta el monitoreo de un programa— dependen de datos confiables. Si los datos tienen errores que nadie detectó, la decisión también estará equivocada.
+
+**¿Para qué?** Entre otros usos: monitorear programas en ejecución, responder preguntas sobre los datos con confianza, detectar hallazgos que ningún sistema tradicional identifica, o gestionar de forma propositiva con datos integrados mediante el nomenclador.
+
+**El resultado: gestión pública apoyada en datos confiables, sin importar la fuente.**
+
+---
+
+## El problema
+
+La formulación de políticas públicas en América Latina y el Caribe se basa en datos extraídos de sistemas transaccionales que presentan problemas endémicos de calidad:
+
+- **Inconsistencias lógicas no detectables por validación tradicional**: un formulario registra "edad: 25" y "fecha de nacimiento: 2010". Ambos campos son válidos individualmente, pero imposibles en conjunto. La validación estructural no lo detecta.
+- **Nomencladores desactualizados o inconsistentes entre sistemas**: el Ministerio de Salud usa "cod_dx" para diagnóstico, el hospital usa "diagnostico", y el censo usa "CIE10". Ningún sistema los reconcilia.
+- **Datos geográficamente inválidos**: coordenadas fuera del área de operación, depósitos a 500km de las rutas de entrega, puntos duplicados.
+- **Errores de captura masivos**: el 30% de los registros de un consolidado pueden tener campos erróneos que pasan validación estructural pero son lógicamente imposibles.
+
+Las herramientas existentes en el catálogo de Código para el Desarrollo abordan parte del problema: **Data Cleaner** aplica reglas sintácticas a CSV, **OpenRefine** permite limpieza manual, y **Atypical Data Classifier** detecta anomalías en encuestas. Sin embargo, ninguna combina validación semántica con IA, corrección automática, y generalidad para cualquier dominio de política pública.
+
+---
+
+## Cómo funciona
+
+```mermaid
+flowchart LR
+    subgraph Sistemas["Sistemas del ministerio"]
+        S1["CRM"]
+        S2["Formularios"]
+        S3["Censo / RIPS"]
+    end
+
+    subgraph GA["Governance Agent"]
+        direction TB
+        C1["Capa 1: Estructural\n¿Faltan campos? ¿Tipos correctos?"]
+        C2["Capa 2: Semántica con IA\n¿Edad y fecha de nacimiento coinciden?"]
+        C3["Capa 3: Reglas del dominio\n¿Monto dentro del máximo legal?"]
+        AC["Auto-corrección con IA"]
+        MEM["Memoria: aprende\nde cada corrección"]
+
+        C1 --> C2 --> C3
+        C3 --> AC
+        AC -->|re-intenta| C1
+        C3 --> MEM
+    end
+
+    subgraph Entrega["Entregable"]
+        R["Reporte de Calidad\ndel Consolidado"]
+        D["Datos validados\ny corregidos"]
+    end
+
+    subgraph Decision["Toma de decisiones"]
+        P["Planificador decide\nsobre datos confiables"]
+    end
+
+    Sistemas -->|"consolidado de datos"| GA
+    GA -->|"score + issues"| R
+    GA -->|"datos limpios"| D
+    R --> P
+    D --> P
+```
+
+**El entregable**: un reporte de calidad del consolidado que muestra qué datos estaban mal, qué se corrigió automáticamente, y qué requiere revisión humana — antes de que el planificador use esos datos para tomar decisiones.
+
+![Reporte de Calidad](docs/reporte_calidad.png)
+
+### Tres capas de validación
+
+| Capa | Qué valida | Ejemplo |
+|------|-----------|---------|
+| **Estructural** | Tipos, campos obligatorios, valores permitidos | "El campo `fecha_nacimiento` está vacío" |
+| **Semántica con IA** | Inconsistencias lógicas, valores implausibles | "Edad 25 con fecha de nacimiento 2010 es contradictorio" |
+| **Reglas de dominio** | Coherencia con el nomenclador y restricciones del ministerio | "El monto del subsidio excede el máximo legal permitido" |
+
+### Auto-corrección
+
+Cuando se detectan errores críticos, el agente usa IA para corregir automáticamente los datos y re-intenta la validación (hasta 3 iteraciones). Si no puede corregir, bloquea y reporta.
+
+### Human-in-the-loop
+
+Los warnings (no críticos) se acumulan como preguntas batch para el planificador. No detienen el proceso. El planificador responde al final, y el agente aprende de sus respuestas.
+
+### Memoria acumulativa
+
+Cada corrección aceptada o rechazada se almacena en PackMemory. Tras 5 aceptaciones de la misma corrección, se auto-promueve a regla automática. El agente aprende del dominio.
+
+---
 
 ## Arquitectura
 
 ```
-Usuario consulta
-    |
-    +-- Agente ReAct (agent.py) — loop think/act/observe con LangGraph
-    |       Tools: search_graph, detect_standard, validate_interop,
-    |              generate_transform, list_concepts, get_classifier
-    |
-    +-- MoA (moa_agent.py) — 3 agentes especializados en paralelo
-    |       +-- JURIDICO — normativo, legal, respaldo normativo
-    |       +-- TECNICO — estandares, interoperabilidad, transformaciones
-    |       +-- ESTADISTICO — calidad de datos, sesgos, metodologia
-    |       +-- SINTETIZADOR — combina las 3 perspectivas (guardrail: juridico prioritario)
-    |
-    +-- Inference Engine (inference.py) — resolucion semantica sin LLM
-    |       1. Patrones regex/heuristicas (fechas, años, DUI, NIT, email, booleanos, edad, %)
-    |       2. Listas de referencia (departamentos_sv, meses_es, genero, estado_civil, etc.)
-    |       3. Huella de valores (overlap coefficient contra conceptos existentes)
-    |
-    +-- RAG Factory (rag_factory.py) — ingesta masiva de diccionarios de datos
-    |       Pipeline: Extract -> Profile -> Clean -> Match -> Inference -> Propose -> Ingest
-    |
-    +-- Nomenclador (nomenclar.py) — flujo de 2 rondas
-    |       Ronda 1: descubrir variables, detectar gaps
-    |       Ronda 2: completar gaps (inference high -> LLM -> normative RAG)
-    |
-    +-- RAG Documental (normative_rag.py) — respaldo normativo con Cohere embeddings
-    |
-    +-- MCP Server (mcp_server.py) — expone el nomenclador a IDEs (Cursor, Windsurf, VS Code)
-    |
-    +-- CLI (cli.py) — interfaz interactiva con rich console
+governance-agent/
+├── src/
+│   ├── core/                          # Núcleo abstracto (domain-agnostic)
+│   │   ├── domain_pack.py             # Schema de pack + loader + auto-generación
+│   │   ├── validator.py               # Motor de validación multi-capa
+│   │   ├── llm_adapter.py             # Adapter LLM (multi-provider con failover)
+│   │   ├── orchestrator.py            # Orquestador: validar → corregir → solver
+│   │   ├── pack_memory.py             # Memoria de correcciones con auto-promoción
+│   │   ├── human_loop.py              # Human-in-the-loop batch
+│   │   ├── profiler.py                # Profiler de datos
+│   │   ├── inference.py               # Inferencia de mapeos de campos
+│   │   ├── standards.py               # Registro dinámico de estándares
+│   │   └── mcp_server_abstract.py     # MCP server abstracto
+│   ├── domain_packs/                  # Packs de dominio (intercambiables)
+│   │   ├── vrp/                       # Logística de entrega
+│   │   │   ├── pack.yaml              # Schema + reglas + mapeos
+│   │   │   └── vrp_validators.py      # Validadores custom
+│   │   └── salud/                     # Nomenclador de salud
+│   │       └── pack.yaml
+│   ├── llm_client.py                  # Cliente LLM multi-provider con failover
+│   └── mcp_server.py                  # MCP server (compatibilidad)
+├── scripts/                           # Scripts de prueba y demostración
+│   ├── quickstart.py                  # Demo out-of-the-box
+│   ├── test_real_data.py              # Tests con datos reales
+│   ├── test_llm_semantic.py           # Tests de capa semántica con LLM
+│   ├── test_orchestrator.py           # Tests del orquestador completo
+│   └── generate_vrp_pack.py           # Auto-generación de pack desde Pydantic
+├── pyproject.toml
+├── LICENSE
+└── README.md
 ```
 
-## Knowledge Graph
+**Principio clave**: el núcleo (`core/`) no conoce ningún dominio. Todo el conocimiento de dominio vive en los packs (`domain_packs/`). Un nuevo ministerio = un nuevo pack. El código no se modifica.
 
-Nodos: `Concept`, `Field`, `Classifier`, `Context`, `Source`, `Normative`, `AnonymizationRule`
-Edges: `IMPLEMENTA`, `USA_CLASIFICADOR`, `RESPALDADO_POR`, `EQUIVALE_A`, `COMPUESTO_DE`, `TIENE_CONTEXTO`
+---
 
-**Persistencia dual-write:** PostgreSQL (Supabase, schema `governance`) + JSON local (fallback).
+## Instalación
 
-### Schema PostgreSQL
+### Requisitos
 
-| Tabla | Proposito |
-|---|---|
-| `governance.graph_nodes` | Nodos del knowledge graph (id, type, data JSONB) |
-| `governance.graph_edges` | Edges del grafo (source_id, target_id, type, data JSONB) |
-| `governance.nomenclador_version` | Versionado del nomenclador |
-| `governance.lifecycle_log` | Decision log del ciclo de vida de variables (dual-write) |
+- Python 3.11+
+- [uv](https://docs.astral.sh/uv/) (gestor de paquetes)
+- API key de al menos un proveedor LLM:
+  - Cualquier proveedor compatible con la API de OpenAI (varios ofrecen free tier)
 
-## Lifecycle y Decision Log
-
-Cada variable canonica es "viva": nace, cambia, se deprecia, se retira.
-Cada transicion se registra con **quien, que, por que y cuando**.
-
-- **Estados:** `activo`, `deprecado`, `retirado`
-- **Review workflow (Gap C):** `proposed` -> `under_review` -> `approved`/`rejected`
-- **Dual-write:** PostgreSQL `governance.lifecycle_log` + JSON local `nomenclador/decision_log.json`
-
-## Inference Engine
-
-Motor de inferencia semantica — capa intermedia entre deteccion de estandares y LLM.
-Resuelve columnas sin usar LLM, reduciendo costo y carga humana.
-
-### 3 mecanismos en orden de confianza
-
-1. **Patrones de tipo semantico** (regex/heuristicas) -> high confidence
-   - Fechas (ISO 8601, latino), años (1900-2099)
-   - DUI, NIT (El Salvador), email, booleanos, edad, porcentaje
-
-2. **Listas de referencia** (soft standards) -> high/medium confidence
-   - `departamentos_sv`, `meses_es`, `dias_semana_es`, `genero_binario`, `estado_civil`, `nivel_educativo`, `tipo_sangre`
-   - Archivos CSV en `src/reference_lists/`
-
-3. **Huella de valores** (overlap coefficient) -> high/medium confidence
-   - Compara valores normalizados contra conceptos existentes en el grafo
-
-### Flujo sin friccion
-
-- **HIGH confidence** -> auto-aprobar (igual que estandares ISO)
-- **MEDIUM confidence** -> marcar como proposed, seguir, NO detener pipeline
-- **LOW confidence** -> ir al LLM si `--llm`, sino tambien proposed
-- Humano revisa en lote post-hoc: `batch-approve --confidence medium`
-
-## Stack
-
-- **Python 3.12+** con `uv`
-- **NetworkX** — knowledge graph en memoria
-- **PostgreSQL** (Supabase) — persistencia dual-write
-- **LangGraph** — state machine del agente ReAct
-- **Groq** — `gpt-oss-120b` (primario) + `gpt-oss-20b` (fallback)
-- **Cohere** — `embed-multilingual-v3.0` para RAG normativo
-- **MCP** — servidor para integracion con IDEs
-- **Rich** — CLI con consola enriquecida
-- **Sin pandas/numpy** — usa libreria estandar `csv` (DLL load failed en Windows)
-
-## Setup
+### Pasos
 
 ```bash
-# Instalar dependencias
+# 1. Clonar el repositorio
+git clone https://github.com/rogelioGuerrero/governance-agent.git
+cd governance-agent
+
+# 2. Instalar dependencias
 uv sync
 
-# Configurar entorno
+# 3. Configurar API keys
 cp .env.example .env
-# Editar .env con tus API keys:
-#   GROQ_API_KEY=gsk_...
-#   GROQ_MODEL_PRIMARY=openai/gpt-oss-120b
-#   GROQ_MODEL_FALLBACK=openai/gpt-oss-20b
-#   COHERE_API_KEY=cohere_...
-#   DATABASE_URL=postgresql://...  (opcional, sin esto usa JSON local)
-#   ANON_SALT=...  (para seudonimizacion)
+# Editar .env con tu API key de cualquier proveedor compatible con OpenAI
+#   Ej: GROQ_API_KEY=gsk_...  |  GEMINI_API_KEY=...  |  SAMBANOVA_API_KEY=...
+
+# 4. Verificar instalación
+uv run python scripts/quickstart.py
 ```
 
-## Uso
+---
 
-### CLI interactivo
-
-```bash
-uv run python -m src.cli
-```
-
-### Comandos principales
-
-#### Perfilar un CSV
-
-```bash
-python -m src.cli profile demo/mag_produccion_agricola.csv --auto
-
-> **Nota:** Sin --auto, el comando entra en modo interactivo (Confirm.ask) y se queda esperando input. Usar --auto para pipelines automatizados.
-```
-
-Muestra:
-- Tabla con tipo CSV, tipo inferido, nulos, unicos, estandar detectado
-- Seccion de alertas (null ratio alto, columna constante, encoding, posible PK)
-- Detalle por columna con razon de inferencia
-
-#### Nomenclador — flujo de 2 rondas
-
-```bash
-# Interactivo (pide confirmacion humana)
-python -m src.cli nomenclar demo/mag_produccion_agricola.csv
-
-# Auto (sin confirmacion humana, conceptos quedan en proposed)
-python -m src.cli nomenclar demo/mag_produccion_agricola.csv --auto
-```
-
-Ronda 1: descubre variables, detecta estandares, identifica gaps.
-Ronda 2: completa gaps usando inference engine (high) -> LLM -> normative RAG.
-
-Al final muestra **resumen de cobertura**:
-```
-Resumen de cobertura:
-  Estandares ISO detectados:    0  (0%)
-  Inferencia semantica high:    2  (33%)
-  Inferencia semantica med:     0  (0%)
-  LLM (Ronda 2):                4  (67%)
-  Sin mapear:                   4  (67%)
-  Auto-resueltos (sin LLM): 33%
-```
-
-#### Ingesta masiva
-
-```bash
-python -m src.cli ingest demo/mag_produccion_agricola.csv --auto
-```
-
-Pipeline completo de RAG Factory con resumen de cobertura por metodo.
-
-#### Batch approve con filtro de confianza
-
-```bash
-# Aprobar solo conceptos de alta confianza
-python -m src.cli batch-approve --confidence high
-
-# Aprobar conceptos de confianza media o alta
-python -m src.cli batch-approve --confidence medium
-```
-
-Muestra tabla con concepto, confianza (coloreada), razon de inferencia y estandar.
-
-#### Otros comandos
-
-| Comando | Descripcion |
-|---|---|
-| `catalog` | Listar conceptos del nomenclador |
-| `search <variable>` | Buscar variable en el nomenclador |
-| `interop <var1> <var2>` | Verificar interoperabilidad entre variables |
-| `transform <var1> <var2>` | Generar SQL + JSON Schema de transformacion |
-| `review` | Revisar conceptos propuestos (human-in-the-loop) |
-| `classify <concept>` | Asignar clasificador a concepto |
-| `sensitive <concept>` | Marcar concepto como sensible (PII) |
-| `agent <pregunta>` | Consultar agente ReAct |
-| `moa <pregunta>` | Consultar MoA (3 agentes + sintetizador) |
-| `version` | Version actual del nomenclador |
-| `history <concept>` | Historial de cambios de una variable |
-| `register-standard` | Registrar nuevo estandar |
-| `list-standards` | Listar estandares registrados |
-| `demo-agri-env` | Demo completo con datos agricolas y ambientales |
-
-### Agente ReAct
+## Uso rápido
 
 ```python
-from src.agent import run_agent
+from src.core.domain_pack import PackLoader
+from src.core.validator import ValidationEngine
+from src.core.llm_adapter import LLMAdapter
+from src.core.pack_memory import PackMemory
+from src.core.human_loop import HumanInTheLoop
 
-result = run_agent("¿La variable sexo es interoperable entre SISA y RAAG?")
-print(result["final_answer"])
+# 1. Cargar el domain pack del ministerio
+pack = PackLoader.from_yaml("src/domain_packs/salud/pack.yaml")
+
+# 2. Configurar el motor de validación
+llm = LLMAdapter(json_mode=True, temperature=0.1)
+memory = PackMemory("salud")
+hitl = HumanInTheLoop(pack_memory=memory)
+engine = ValidationEngine(pack=pack, pack_memory=memory, hitl=hitl, llm_client=llm)
+
+# 3. Validar el consolidado de datos
+resultado = engine.validate(consolidado_de_datos)
+
+# 4. Revisar resultados
+print(f"Válido: {resultado.is_valid}")
+print(f"Issues: {len(resultado.issues)}")
+for issue in resultado.issues:
+    print(f"  [{issue.severity}] {issue.field_name}: {issue.message}")
+    if issue.suggested_value:
+        print(f"    Sugerencia: {issue.suggested_value}")
+
+# 5. Preguntas para el planificador (no bloqueantes)
+for q in hitl.get_pending_questions():
+    print(f"  [{q.level}] {q.field_name}: {q.message}")
 ```
 
-### MoA (Mixture of Agents)
+---
 
-```python
-from src.moa_agent import run_moa
+## Domain Packs
 
-result = run_moa("¿Puedo usar la variable etnia del censo para cross-tab con registro civil?")
-print(result["final_answer"])
-# result["juridico"], result["tecnico"], result["estadistico"] tambien disponibles
-```
+Un Domain Pack encapsula todo el conocimiento de un dominio de política pública:
 
-### RAG Factory — ingesta masiva
+| Componente | Descripción | Ejemplo |
+|-----------|-------------|---------|
+| **Schema fields** | Campos esperados, tipos, obligatoriedad | `locations.id` (string, requerido), `locations.coords` (array[float], requerido) |
+| **Semantic rules** | Reglas lógicas en lenguaje natural para la IA | "end_time del vehículo ≥ time_window_end más tardío" |
+| **Inference mappings** | Sinónimos de campos para interoperabilidad | `lat` ↔ `latitude` ↔ `latitud` ↔ `y` |
+| **Custom validators** | Validadores específicos en Python | Coordenadas en área de operación, balance pickup-delivery |
+| **Standards** | Nomencladores y clasificadores del dominio | CIE-10, CUOC, cultivos permitidos |
+| **Metadata** | Configuración del dominio | Área geográfica, horas típicas de servicio |
 
-```python
-from src.rag_factory import create_ingestion_plan, execute_ingestion_plan
+### Packs disponibles
 
-# 1. Crear plan (el humano revisa)
-plan = create_ingestion_plan("diccionario_sisa.csv", source_type="csv", use_llm=True)
+| Pack | Dominio | Estado |
+|------|---------|--------|
+| `vrp` | Logística de optimización de rutas | Funcional con datos reales |
+| `salud` | Nomenclador de salud | Funcional |
 
-# 2. Ejecutar tras aprobacion
-resultado = execute_ingestion_plan(plan)
-```
-
-### MCP Server
+### Crear un nuevo pack
 
 ```bash
-# Ejecutar servidor MCP
-uv run nomenclador-mcp
+# Auto-generar desde un modelo Pydantic existente
+uv run python scripts/generate_vrp_pack.py
 
-# O desde un IDE (ej. Cursor), agregar al settings:
-# {
-#   "mcpServers": {
-#     "nomenclador": { "command": "uv", "args": ["run", "nomenclador-mcp"] }
-#   }
-# }
+# O crear manualmente un pack.yaml
+# Ver src/domain_packs/salud/pack.yaml como ejemplo
 ```
 
-Tools expuestas: `list_concepts`, `search_variable`, `get_concept`,
-`check_interoperability`, `get_transform`, `validate_field`, `get_classifier`.
+---
 
-## Estructura del proyecto
+## Casos de uso
 
-```
-src/
-+-- inference.py        # Motor de inferencia semantica (patrones, listas, huella)
-+-- agent.py            # Agente ReAct con LangGraph
-+-- moa_agent.py        # Mixture of Agents (3 agentes paralelos + sintetizador)
-+-- cli.py              # CLI interactivo (23 comandos)
-+-- groq_client.py      # Cliente Groq con retry y fallback
-+-- log_config.py       # Configuracion centralizada de logging
-+-- mcp_server.py       # Servidor MCP para IDEs
-+-- rag_factory.py      # Pipeline de ingesta masiva (7 fases + inference engine)
-+-- nomenclar.py        # Flujo 2 rondas: descubrimiento + completado
-+-- normative_rag.py    # RAG documental con Cohere embeddings
-+-- profiler.py         # Profiling de CSV
-+-- standards.py        # Estandares pre-registrados (ISO 3166, ISO 5218, etc.)
-+-- guardrails.py       # Guardrails de interoperabilidad semantica
-+-- transformer.py      # Generador de transformaciones SQL + JSON Schema
-+-- verifier.py         # Verificacion determinista de interoperabilidad
-+-- lifecycle.py        # Lifecycle + decision log (dual-write PG + JSON)
-+-- graph/
-|   +-- catalog.py      # NomencladorGraph (NetworkX + PostgreSQL dual-write)
-|   +-- schema.py       # Definicion de nodos y edges (Pydantic)
-+-- reference_lists/    # 7 CSVs con listas de referencia (soft standards)
-|   +-- departamentos_sv.csv
-|   +-- meses_es.csv
-|   +-- dias_semana_es.csv
-|   +-- genero_binario.csv
-|   +-- estado_civil.csv
-|   +-- nivel_educativo.csv
-|   +-- tipo_sangre.csv
-+-- nomenclador/        # Almacenamiento local (JSON)
-    +-- nomenclador.json
-    +-- decision_log.json
-    +-- normative_corpus.json
-demo/                   # Datos de demostracion
-    +-- mag_produccion_agricola.csv
-    +-- marn_cobertura_forestal.csv
-tests/                  # CSVs de prueba
-    +-- sample_censo.csv
-    +-- sample_hospital.csv
-    +-- sample_ministerio_sucio.csv
-    +-- sample_seguro.csv
-```
+### Ministerio de Agricultura
 
-## Governance Gaps abordados
+Un ministerio de agricultura necesita apoyar una política de subsidios a pequeños productores. Consolida los datos anuales de su registro de productores. Governance Agent valida:
 
-- **Gap A — Anonimizacion:** SQL de seudonimizacion automatica para PII/sensible
-- **Gap B — Graph DB:** Dual-write NetworkX <-> PostgreSQL
-- **Gap C — Human-in-the-Loop:** Review workflow para conceptos propuestos por IA
-- **Gap D — Clasificadores dinamicos:** Importacion y deteccion automatica de estandares
-- **Gap M — MoA Arbitraje:** Guardrail que da prioridad absoluta al agente juridico en conflictos legales
+- **Estructural**: todos los registros tienen ID, cultivo, hectáreas, rendimiento
+- **Dominio**: el cultivo existe en el nomenclador, las coordenadas están en área agrícola
+- **Semántica (IA)**: "rendimiento de 50 ton/ha en papa es implausible (rango normal: 15-25). ¿Corregir a 18?"
 
-## Datos de demostracion
+### Ministerio de Salud
 
-```bash
-# Perfilar
-python -m src.cli profile demo/mag_produccion_agricola.csv --auto
+Un ministerio de salud consolida datos de RIPS, SISS y el censo para evaluar cobertura. Governance Agent valida:
 
-> **Nota:** Sin --auto, el comando entra en modo interactivo (Confirm.ask) y se queda esperando input. Usar --auto para pipelines automatizados.
+- **Estructural**: todos los registros tienen código de diagnóstico, edad, municipio
+- **Dominio**: el código CIE-10 existe en el nomenclador, el municipio es válido
+- **Semántica (IA)**: "edad 25 con fecha de nacimiento 2010 es contradictorio. ¿Corregir fecha a 1999?"
 
-# Nomenclador completo (2 rondas)
-python -m src.cli nomenclar demo/mag_produccion_agricola.csv --auto
-python -m src.cli nomenclar demo/marn_cobertura_forestal.csv --auto
+### Programa de Beneficencia Social
 
-# Ver catalogo resultante
-python -m src.cli catalog
+Un programa de transferencias condicionadas verifica la elegibilidad de beneficiarios antes de emitir pagos. Governance Agent valida:
 
-# Demo integrado (agricola + ambiental)
-python -m src.cli demo-agri-env
-```
+- **Estructural**: todos los registros tienen ID, ingresos, composición familiar, actividad económica
+- **Dominio**: no hay duplicados entre programas, los ingresos están dentro del umbral
+- **Semántica (IA)**: "ingresos de $5,000 con actividad 'desempleado' es inconsistente. ¿Revisar actividad económica?"
+
+### Alcaldía Municipal
+
+Una alcaldía consolida datos de catastro, registro civil y servicios públicos para planificar inversiones locales. Governance Agent valida:
+
+- **Estructural**: todos los registros tienen dirección, predio, contribuyente
+- **Dominio**: el predio existe en el catastro, la dirección corresponde al municipio
+- **Semántica (IA)**: "un predio de 5 m² declarado como residencia familiar es implausible. ¿Revisar superficie?"
+
+---
+
+## Roadmap
+
+- [x] Núcleo abstracto con validación multi-capa
+- [x] Integración LLM agnóstica (cualquier proveedor compatible con OpenAI)
+- [x] Auto-corrección de errores con IA
+- [x] PackMemory con auto-promoción de reglas
+- [x] Human-in-the-loop batch no intrusivo
+- [x] Orquestador completo: validar → corregir → solver
+- [x] Auto-generación de packs desde modelos Pydantic
+- [x] MCP server abstracto para integración con asistentes IA
+- [ ] Conectores para sistemas gubernamentales (API, DB, CSV, SFTP)
+- [ ] Nomenclador canónico como puente entre sistemas
+- [ ] UI web para planificadores no técnicos
+- [ ] Dashboard de calidad de datos por dominio
+
+*Algunas de estas funcionalidades podrían ofrecerse como extensiones o servicios complementarios.*
+
+---
+
+## Contribuir
+
+Las contribuciones son bienvenidas. Ver [CONTRIBUTING.md](CONTRIBUTING.md) para guidelines.
+
+Áreas donde se busca ayuda:
+
+- **Domain packs nuevos**: agricultura, educación, vivienda, beneficencia social
+- **Conectores**: adaptadores para sistemas gubernamentales específicos
+- **Validadores semánticos**: reglas de dominio para nuevos ministerios
+- **Documentación**: traducciones, guías de implementación, casos de estudio
+
+---
+
+## Licencia
+
+[Apache License 2.0](LICENSE) — permite uso comercial, modificación y distribución con atribución.
+
+---
+
+## Contacto
+
+Para implementación, consultoría o colaboración:
+
+- **GitHub Issues**: [https://github.com/rogelioGuerrero/governance-agent/issues](https://github.com/rogelioGuerrero/governance-agent/issues)
+- **Email**: [info@agtisa.com]
+
+---
+
+*Governance Agent es un Bien Público Digital candidato al catálogo de Código para el Desarrollo del BID.*

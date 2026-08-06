@@ -1,0 +1,56 @@
+# Salud Domain Pack
+# Migración del nomenclador institucional actual a formato Domain Pack
+# Este pack preserva toda la funcionalidad existente del governance-agent
+
+name: salud
+version: "1.0.0"
+description: "Gobernanza de datos para salud — nomenclador institucional, interoperabilidad semántica"
+
+# El schema de salud es dinámico (se construye desde el knowledge graph)
+# No tiene un contrato fijo como VRP, sino que descubre campos de las fuentes
+# Por eso schema_fields se deja vacío aquí y se puebla via profiler + inference
+
+semantic_rules:
+  - "Toda variable de salud debe tener población objetivo definida"
+  - "Toda variable de salud debe tener método de captura documentado"
+  - "Los clasificadores deben estar respaldados por norma (ISO, CIE, etc.)"
+  - "Los datos sensibles (PII, salud) requieren regla de anonimización"
+  - "La interoperabilidad entre fuentes requiere 4 checkpoints: población, metodología, clasificador, distribución"
+  - "Las variables propuestas por IA requieren aprobación humana antes de usar"
+  - "El custodio de la variable debe estar definido (persona/rol responsable)"
+  - "Los conceptos pueden componerse o derivarse de otros conceptos"
+
+inference_mappings:
+  fecha: ["date", "fecha", "dia", "fecha_registro"]
+  sexo: ["genero", "gender", "sex"]
+  edad: ["age", "anos", "años"]
+  diagnostico: ["dx", "diagnosis", "cie", "cie10"]
+  institucion: ["hospital", "centro", "establecimiento", "facility"]
+  paciente: ["patient", "beneficiario", "usuario"]
+
+custom_validators: []
+
+metadata:
+  knowledge_graph: true
+  graph_schema: "src/graph/schema.py"
+  normative_rag: true
+  moa_agents: ["JURIDICO", "TECNICO", "ESTADISTICO"]
+  moa_synthesizer: true
+  moa_legal_guardrail: true
+  review_workflow: true
+  data_classifications: ["publico", "interno", "pii", "sensible"]
+  standards:
+    ISO_5218:
+      name: "Sexo biológico"
+      type: "classifier"
+      values:
+        "0": "Desconocido"
+        "1": "Masculino"
+        "2": "Femenino"
+        "9": "No aplicable"
+      name_hints: ["sexo", "genero", "sex", "gender"]
+    CIE_10:
+      name: "Clasificación Internacional de Enfermedades 10a ed."
+      type: "classifier"
+      catalog_file: "cie10.csv"
+      name_hints: ["diagnostico", "dx", "cie", "cie10", "codigo_diagnostico"]

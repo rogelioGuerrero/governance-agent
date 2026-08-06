@@ -33,9 +33,9 @@ from .rag_factory import (
     _standard_to_concept, RawColumn, IngestionPlan,
 )
 from .standards import detect_standard, STANDARDS, list_standards
-from .graph.catalog import NomencladorGraph
+from .graph.catalog import NomencladorGraph, load_graph_cached, clear_graph_cache
 from .graph.schema import ConceptNode, FieldNode, SourceNode, EdgeType
-from .groq_client import call_groq
+from .llm_client import call_groq
 from .inference import infer_semantic_type
 
 logger = logging.getLogger(__name__)
@@ -137,10 +137,8 @@ def discover(file_path: str, source_type: str = "csv") -> DiscoveryReport:
     if not raw_columns:
         return DiscoveryReport(source_name=source_name, issues=["No se pudieron extraer columnas"])
 
-    # Cargar nomenclador existente
-    g = NomencladorGraph()
-    if NOMENCLADOR_PATH.exists():
-        g.load(str(NOMENCLADOR_PATH))
+    # Cargar nomenclador existente (usar cache para reuso de conexion PostgreSQL)
+    g = load_graph_cached()
     existing_concepts = g.list_concepts()
 
     report = DiscoveryReport(source_name=source_name, total_columns=len(raw_columns))
@@ -246,9 +244,7 @@ def complete(report: DiscoveryReport, auto_confirm: bool = False) -> CompletionR
     """
     cr = CompletionReport()
 
-    g = NomencladorGraph()
-    if NOMENCLADOR_PATH.exists():
-        g.load(str(NOMENCLADOR_PATH))
+    g = load_graph_cached()
     cr.version_before = g.version
 
     # Registrar fuente

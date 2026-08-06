@@ -58,6 +58,10 @@ def validate_interoperability(
     """
     checkpoints = []
 
+    # Handle value_equivalence paths without a concept
+    if concept is None:
+        concept = {}
+
     # === Checkpoint 1: Población objetivo ===
     pop_a = field_a.get("population", "").strip().lower()
     pop_b = field_b.get("population", "").strip().lower()

@@ -390,6 +390,12 @@ def retry_stuck_proposals(dry_run: bool = True) -> dict:
                     auto_approved.append(fix)
                 else:
                     g.approve_node(node_id)
+                    try:
+                        from .lifecycle import log_review_event
+                        log_review_event(node_id, "approved", actor="agent:auto-heal",
+                                        reason=f"Auto-aprobado: qs={qs} >= 0.7, stale {days_stale} días")
+                    except Exception:
+                        pass
                     auto_approved.append(fix)
             elif qs < 0.4:
                 flagged_manual.append({

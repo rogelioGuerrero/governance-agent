@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Reporte de Calidad — Governance Agent</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: 'Segoe UI', system-ui, sans-serif; background: #f8fafc; color: #1e293b; padding: 24px; }
+  .container { max-width: 1100px; margin: 0 auto; }
+  .header { background: white; border-radius: 12px; padding: 28px 32px; margin-bottom: 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); }
+  .header h1 { font-size: 22px; color: #0f172a; margin-bottom: 4px; }
+  .header .subtitle { color: #64748b; font-size: 14px; }
+  .scorecard { display: grid; grid-template-columns: 200px 1fr; gap: 24px; align-items: center; margin-top: 20px; }
+  .score-circle { width: 160px; height: 160px; border-radius: 50%; display: flex; flex-direction: column; align-items: center; justify-content: center; border: 8px solid #16a34a; background: white; }
+  .score-value { font-size: 42px; font-weight: 700; color: #16a34a; }
+  .score-label { font-size: 12px; font-weight: 600; color: #16a34a; letter-spacing: 1px; }
+  .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+  .stat-card { background: #f1f5f9; border-radius: 8px; padding: 16px; text-align: center; }
+  .stat-number { font-size: 28px; font-weight: 700; }
+  .stat-label { font-size: 11px; color: #64748b; text-transform: uppercase; letter-spacing: 0.5px; margin-top: 4px; }
+  .stat-errors .stat-number { color: #dc2626; }
+  .stat-warnings .stat-number { color: #f59e0b; }
+  .stat-corrected .stat-number { color: #16a34a; }
+  .stat-review .stat-number { color: #f59e0b; }
+  .section { background: white; border-radius: 12px; padding: 24px 28px; margin-bottom: 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); }
+  .section h2 { font-size: 16px; color: #0f172a; margin-bottom: 16px; border-bottom: 2px solid #e2e8f0; padding-bottom: 8px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  .data-table th { background: #f1f5f9; padding: 10px 12px; text-align: left; font-weight: 600; color: #475569; border-bottom: 2px solid #e2e8f0; }
+  .data-table td { padding: 8px 12px; border-bottom: 1px solid #f1f5f9; }
+  .issues-table th { background: #f1f5f9; padding: 10px 12px; text-align: left; font-weight: 600; color: #475569; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; }
+  .issues-table td { padding: 10px 12px; border-bottom: 1px solid #f1f5f9; vertical-align: top; }
+  .badge { color: white; padding: 3px 8px; border-radius: 4px; font-size: 10px; font-weight: 700; letter-spacing: 0.5px; }
+  code { font-family: 'Consolas', monospace; font-size: 12px; background: #f1f5f9; padding: 2px 6px; border-radius: 3px; }
+  .footer { text-align: center; color: #94a3b8; font-size: 12px; padding: 20px; }
+  .legend { display: flex; gap: 16px; margin-top: 12px; font-size: 12px; color: #64748b; }
+  .legend-dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 4px; }
+</style>
+</head>
+<body>
+<div class="container">
+
+  <div class="header">
+    <h1>Reporte de Calidad de Datos</h1>
+    <div class="subtitle">Corte: ministerio_agricultura · 5 registros · Generado: 2026-08-06 11:31</div>
+
+    <div class="scorecard">
+      <div class="score-circle">
+        <div class="score-value">80</div>
+        <div class="score-label">APROBADO</div>
+      </div>
+      <div class="stats">
+        <div class="stat-card stat-errors">
+          <div class="stat-number">1</div>
+          <div class="stat-label">Errores críticos</div>
+        </div>
+        <div class="stat-card stat-warnings">
+          <div class="stat-number">1</div>
+          <div class="stat-label">Warnings</div>
+        </div>
+        <div class="stat-card stat-corrected">
+          <div class="stat-number">1</div>
+          <div class="stat-label">Auto-corregidos</div>
+        </div>
+        <div class="stat-card stat-review">
+          <div class="stat-number">1</div>
+          <div class="stat-label">Requieren revisión</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="section">
+    <h2>Datos del corte (campos con issues marcados en rojo)</h2>
+    
+    <table class="data-table">
+      <thead><tr><th>productor_id</th><th>cultivo</th><th>hectareas</th><th>rendimiento</th><th>departamento</th><th>latitud</th><th>longitud</th></tr></thead>
+      <tbody><tr><td>P-001</td><td style="background:#fef2f2">arroz</td><td style="background:#fef2f2">5.0</td><td>6.5</td><td>bolivar</td><td>8.88</td><td>-74.78</td></tr><tr><td>P-002</td><td style="background:#fef2f2">papa</td><td style="background:#fef2f2">0.05</td><td>50.0</td><td>bolivar</td><td>45.0</td><td>-74.78</td></tr><tr><td>P-003</td><td style="background:#fef2f2">maiz</td><td style="background:#fef2f2">1200.0</td><td>7.0</td><td>antioquia</td><td>6.25</td><td>-75.56</td></tr><tr><td>P-004</td><td style="background:#fef2f2">cafe</td><td style="background:#fef2f2">3.0</td><td>1.5</td><td>caldas</td><td>5.07</td><td>-75.51</td></tr><tr><td>P-005</td><td style="background:#fef2f2">trigo</td><td style="background:#fef2f2">8.0</td><td>2.5</td><td>cundinamarca</td><td>4.71</td><td>-74.07</td></tr></tbody>
+    </table>
+    <div class="legend">
+      <span><span class="legend-dot" style="background:#fef2f2"></span>Campo con issue detectado</span>
+      <span><span class="legend-dot" style="background:white;border:1px solid #e2e8f0"></span>Campo válido</span>
+    </div>
+  </div>
+
+  <div class="section">
+    <h2>Issues detectados (2 total)</h2>
+    <table class="issues-table">
+      <thead>
+        <tr>
+          <th>#</th>
+          <th>Severidad</th>
+          <th>Capa</th>
+          <th>Campo</th>
+          <th>Tipo</th>
+          <th>Mensaje</th>
+          <th>Valor original</th>
+          <th>Corrección</th>
+          <th>Estado</th>
+        </tr>
+      </thead>
+      <tbody>
+        
+    <tr>
+      <td>1</td>
+      <td><span class="badge" style="background:#f59e0b">WARNING</span></td>
+      <td>Estructural</td>
+      <td><code>hectareas</code></td>
+      <td>out_of_range</td>
+      <td>Campo 'hectareas' valor 0.05 < mínimo 0.1</td>
+      <td><code>0.05</code></td>
+      <td><code style="color:#16a34a">0.1</code></td>
+      <td style="color:#16a34a">Auto-corregido</td>
+    </tr>
+    <tr>
+      <td>2</td>
+      <td><span class="badge" style="background:#dc2626">ERROR</span></td>
+      <td>Estructural</td>
+      <td><code>cultivo</code></td>
+      <td>enum_invalid</td>
+      <td>Campo 'cultivo' valor 'trigo' no está en enum ['arroz', 'maiz', 'papa', 'cafe', 'cacao', 'frijol']</td>
+      <td><code>"trigo"</code></td>
+      <td><code style="color:#16a34a">—</code></td>
+      <td style="color:#f59e0b">Requiere revisión</td>
+    </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="footer">
+    Generado por Governance Agent · Código para el Desarrollo · BID
+  </div>
+
+</div>
+</body>
+</html>

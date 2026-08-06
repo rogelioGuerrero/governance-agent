@@ -21,6 +21,7 @@ import math
 import os
 import re
 import urllib.request
+import urllib.error
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
@@ -185,6 +186,7 @@ def _cohere_embed(texts: list[str]) -> list[list[float]]:
         raise RuntimeError("COHERE_API_KEY no configurada")
     all_embeddings: list[list[float]] = []
     batch_size = 96
+    max_retries = 2
     for i in range(0, len(texts), batch_size):
         batch = texts[i:i + batch_size]
         payload = json.dumps({
@@ -201,9 +203,28 @@ def _cohere_embed(texts: list[str]) -> list[list[float]]:
                 "Content-Type": "application/json",
             },
         )
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-        all_embeddings.extend(data["embeddings"]["float"])
+        for retry in range(max_retries + 1):
+            try:
+                with urllib.request.urlopen(req, timeout=45) as resp:
+                    data = json.loads(resp.read().decode("utf-8"))
+                all_embeddings.extend(data["embeddings"]["float"])
+                break
+            except urllib.error.HTTPError as e:
+                if e.code == 429 and retry < max_retries:
+                    import time
+                    wait = 2 ** (retry + 1)
+                    log.warning("Cohere 429 rate limit, esperando %ss...", wait)
+                    time.sleep(wait)
+                    continue
+                raise
+            except urllib.error.URLError as e:
+                if retry < max_retries:
+                    import time
+                    wait = 2 ** (retry + 1)
+                    log.warning("Cohere URLError: %s, reintentando en %ss...", e, wait)
+                    time.sleep(wait)
+                    continue
+                raise
     return all_embeddings
 
 
@@ -224,9 +245,29 @@ def _cohere_embed_query(query: str) -> list[float]:
             "Content-Type": "application/json",
         },
     )
-    with urllib.request.urlopen(req, timeout=15) as resp:
-        data = json.loads(resp.read().decode("utf-8"))
-    return data["embeddings"]["float"][0]
+    max_retries = 2
+    for retry in range(max_retries + 1):
+        try:
+            with urllib.request.urlopen(req, timeout=20) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+            return data["embeddings"]["float"][0]
+        except urllib.error.HTTPError as e:
+            if e.code == 429 and retry < max_retries:
+                import time
+                wait = 2 ** (retry + 1)
+                log.warning("Cohere query 429, esperando %ss...", wait)
+                time.sleep(wait)
+                continue
+            raise
+        except urllib.error.URLError as e:
+            if retry < max_retries:
+                import time
+                wait = 2 ** (retry + 1)
+                log.warning("Cohere query URLError: %s, reintentando en %ss...", e, wait)
+                time.sleep(wait)
+                continue
+            raise
+    raise RuntimeError("Cohere embed query: max retries exceeded")
 
 
 class NormativeRAG:

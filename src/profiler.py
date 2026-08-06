@@ -40,7 +40,7 @@ def profile_csv(file_path: str, max_rows: int = 10000) -> list[TableProfile]:
     """Perfila un archivo CSV y retorna perfiles de tabla (sin pandas)."""
     table_name = os.path.basename(file_path).replace(".csv", "")
 
-    with open(file_path, "r", encoding="utf-8-sig") as f:
+    with open(file_path, "r", encoding="utf-8-sig", errors="replace") as f:
         reader = csv.DictReader(f)
         rows = []
         for i, row in enumerate(reader):

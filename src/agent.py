@@ -33,7 +33,7 @@ from pathlib import Path
 
 from langgraph.graph import StateGraph, END
 
-from .groq_client import call_groq, call_groq_with_tools
+from .llm_client import call_groq, call_groq_with_tools
 from .graph.catalog import NomencladorGraph, load_graph_cached, clear_graph_cache
 from .graph.schema import EdgeType
 from .standards import detect_standard, STANDARDS, get_standard_values, list_standards
@@ -47,6 +47,7 @@ from .verifier import (
     verify_graph_invariants,
 )
 from .health import check_health, fix_orphan_nodes, retry_stuck_proposals, format_health_report
+from .lifecycle import recall_feedback as lifecycle_recall_feedback
 
 from semantic_tools.similarity import (
     cosine_similarity as st_cosine,
@@ -55,6 +56,32 @@ from semantic_tools.similarity import (
     tfidf_similarity as st_tfidf,
     tfidf_similarity_batch as st_tfidf_batch,
     composite_similarity as st_composite,
+)
+from semantic_tools.statistics import (
+    welch_t_test as st_welch_t_test,
+    chi_square_test as st_chi_square_test,
+    pearson_correlation as st_pearson,
+    spearman_correlation as st_spearman,
+    distribution_summary as st_distribution_summary,
+)
+from semantic_tools.clustering import (
+    cluster_columns as st_cluster_columns,
+    optimal_k as st_optimal_k,
+    column_profile as st_column_profile,
+)
+from semantic_tools.quality import (
+    detect_numeric_anomalies as st_detect_numeric_anomalies,
+    detect_categorical_anomalies as st_detect_categorical_anomalies,
+    auto_clean as st_auto_clean,
+    column_quality_score as st_column_quality_score,
+)
+from semantic_tools.profiling import (
+    profile_csv as st_profile_csv,
+    format_profile_summary as st_format_profile,
+)
+from semantic_tools.schema_match import (
+    auto_match as st_auto_match,
+    format_match_result as st_format_match,
 )
 
 logger = logging.getLogger(__name__)
@@ -86,6 +113,13 @@ REGLAS:
 - AUTO-HEALING: Despues de ingest o nomenclar, considera ejecutar graph_health para verificar que el grafo quedo consistente. Si hay violaciones, intenta fix_orphans antes de reportar al humano.
 - VALUE-LEVEL EQUIVALENCE: Para descubrir equivalencias semanticas entre datasets de formato largo (donde el significado esta en los valores, no en los nombres de columnas), usa sample_column_values para extraer valores unicos de una columna, y luego compare_value_sets para que el LLM razone sobre equivalencias entre dos conjuntos de valores. Para casos donde la combinacion de 2+ columnas (ej: Item+Element) equivale a una sola columna en otro dataset, usa compare_composite_values. Despues de descubrir equivalencias, usa persist_equivalences para guardarlas en el grafo como aristas EQUIVALE_A. Este es el unico modo de descubrir equivalencias no obvias que validate_interop no puede detectar.
 - DETERMINISTIC SIMILARITY: Usa semantic_similarity para comparar dos columnas cuantitativamente (cosine, jaccard, overlap) sin gastar tokens de LLM. Usa text_similarity para comparar definiciones de conceptos via TF-IDF. Usa composite_similarity para combinar ambos (valores + texto) en un solo score. Estas tools son deterministas y gratuitas — usalas como pre-filtro antes de compare_value_sets (LLM) para descartar pares obvios.
+- STATISTICAL ANALYSIS: Usa compare_distributions para comparar dos columnas numericas con Welch t-test (diferencia significativa de medias) o chi_square_test (distribucion categorica). Usa correlation para verificar si dos columnas estan correlacionadas (Pearson o Spearman). Usa distribution_summary para inspeccionar la distribucion de una columna (media, mediana, std, cuartiles, cardinalidad). Todas deterministas, sin LLM.
+- COLUMN CLUSTERING: Usa cluster_columns para agrupar columnas de un dataset por perfil estructural (tipo, cardinalidad, missing, etc.). Usa optimal_k para encontrar el numero optimo de clusters via elbow method. Util para descubrir columnas similares dentro de un mismo dataset antes de comparar entre datasets.
+- DATA QUALITY: Usa column_quality para detectar anomalias (outliers IQR/zscore en numericas, valores raros o artefactos de encoding en categoricas) y obtener un score de calidad 0-100. Usa auto_clean para limpiar whitespace, encoding mojibake, y fill de valores faltantes. Ejecuta column_quality ANTES de recomendar interoperabilidad con un campo de baja calidad.
+- AUTONOMOUS PIPELINE: Para mapear dos datasets completos, usa profile_dataset para perfilar todas las columnas en un solo paso, luego auto_match para ejecutar similarity + statistics + quality en batch y obtener mapeos con score de confianza. Los mapeos de alta confianza (>=0.7) se persisten en el grafo automaticamente. Los de confianza media (0.4-0.7) se escalan a ask_human. Los bajos se descartan. NO uses tool por tool manualmente cuando auto_match puede hacer todo en un paso.
+- PROFILE FIRST: Antes de cualquier comparacion entre datasets, usa profile_dataset para entender que tipo de datos tiene cada columna (numerica, categorica, fecha, ID, booleano, libre). Esto evita comparar columnas incompatibles.
+- LEARNING LOOP: Si ves "DECISIONES PREVIAS RELEVANTES" en el contexto, considera ese feedback antes de proponer mapeos o crear conceptos. Si un humano rechazo algo similar antes, no repitas el mismo error. Usa recall_feedback para buscar mas contexto si lo necesitas.
+- COMMUNITY DETECTION: Usa detect_communities para descubrir grupos de variables relacionadas estructuralmente (Louvain, sin LLM). Usa community_reports para generar resumenes narrativos de cada grupo con LLM. Usa global_search para responder preguntas transversales sobre todo el nomenclador (ej: "que areas tematicas cubre?", "hay brechas de cobertura?"). Estas tools emulan GraphRAG Global Search.
 """
 
 
@@ -719,6 +753,14 @@ def tool_persist_equivalences(
     med = sum(1 for c in confidence_map.values() if c == "media")
     low = sum(1 for c in confidence_map.values() if c == "baja")
 
+    try:
+        from .lifecycle import log_event
+        log_event(field_a_id, "equivalence_created", actor="agent",
+                  reason=f"Equivalencia descubierta con {field_b_id} via value-level discovery",
+                  details=f"mapping_size={len(mapping)}, high={high}, med={med}, low={low}")
+    except Exception:
+        pass
+
     return (
         f"Equivalencias persistidas en el grafo: {field_a_id} -> {field_b_id}\n"
         f"  Total mapeos: {len(mapping)}\n"
@@ -860,9 +902,515 @@ def tool_composite_similarity(source_db_a: str, column_a: str, source_db_b: str,
     return "\n".join(lines)
 
 
+def _extract_all_values(csv_path: Path, column_name: str, max_values: int = 500) -> tuple[list, Optional[list[str]]]:
+    """Extraer todos los valores (no solo unicos) de una columna de un CSV.
+
+    Returns (values, None) on success, ([], headers) if column not found.
+    """
+    with open(csv_path, "r", encoding="utf-8-sig", errors="replace") as f:
+        reader = csv.DictReader(f)
+        headers = reader.fieldnames or []
+        matched_col = column_name
+        if column_name not in headers:
+            col_norm = column_name.lower().replace(" ", "_")
+            for h in headers:
+                if h.lower().replace(" ", "_") == col_norm:
+                    matched_col = h
+                    break
+            if matched_col == column_name:
+                return [], headers
+        values = []
+        for row in reader:
+            val = row.get(matched_col, "")
+            if val and val.strip() and val.strip().lower() not in ("", "na", "n/a", "null", "none"):
+                values.append(val.strip())
+            if len(values) >= max_values:
+                break
+    return values, None
+
+
+def tool_compare_distributions(source_db_a: str, column_a: str, source_db_b: str, column_b: str, test_type: str = "auto") -> str:
+    """Compara dos columnas con pruebas estadisticas (Welch t-test o chi-square). Sin LLM."""
+    csv_a = _find_csv_for_source_db(source_db_a)
+    csv_b = _find_csv_for_source_db(source_db_b)
+    if not csv_a:
+        return f"No se encontro CSV para '{source_db_a}'"
+    if not csv_b:
+        return f"No se encontro CSV para '{source_db_b}'"
+
+    vals_a, err_a = _extract_all_values(csv_a, column_a)
+    if err_a is not None:
+        return f"Columna '{column_a}' no encontrada en {source_db_a}. Columnas: {', '.join(err_a)}"
+    vals_b, err_b = _extract_all_values(csv_b, column_b)
+    if err_b is not None:
+        return f"Columna '{column_b}' no encontrada en {source_db_b}. Columnas: {', '.join(err_b)}"
+
+    if not vals_a or not vals_b:
+        return f"Conjuntos vacios. A={len(vals_a)}, B={len(vals_b)}"
+
+    # Auto-detect: if both columns are mostly numeric, use t-test; otherwise chi-square
+    from semantic_tools.statistics import _to_float_list
+    num_a = _to_float_list(vals_a)
+    num_b = _to_float_list(vals_b)
+    is_numeric = len(num_a) > len(vals_a) * 0.8 and len(num_b) > len(vals_b) * 0.8
+
+    if test_type == "auto":
+        test_type = "ttest" if is_numeric else "chi2"
+
+    lines = [
+        f"Comparacion estadistica: {source_db_a}.{column_a} vs {source_db_b}.{column_b}",
+        f"  Valores A: {len(vals_a)} | Valores B: {len(vals_b)}",
+        f"  Tipo detectado: {'numerico' if is_numeric else 'categorico'}",
+        f"  Test: {test_type}",
+    ]
+
+    if test_type == "ttest":
+        if not is_numeric:
+            return "Welch t-test requiere columnas numericas. Usa test_type='chi2' para datos categoricos."
+        result = st_welch_t_test(num_a, num_b)
+        lines.extend([
+            f"  Media A: {result['mean_a']:.4f} | Media B: {result['mean_b']:.4f}",
+            f"  Std A: {result['std_a']:.4f} | Std B: {result['std_b']:.4f}",
+            f"  t-statistic: {result['t_stat']:.4f}",
+            f"  p-value: {result['p_value']:.6f}",
+            f"  Diferencia significativa: {'SI' if result['significant'] else 'NO'} (alpha=0.05)",
+        ])
+        if result['significant']:
+            lines.append("  => Las medias son estadisticamente diferentes. Las columnas NO son equivalentes.")
+        else:
+            lines.append("  => No hay diferencia significativa. Las distribuciones podrian ser equivalentes.")
+
+    elif test_type == "chi2":
+        result = st_chi_square_test(vals_a, vals_b)
+        lines.extend([
+            f"  Chi-square: {result['chi2']:.4f}",
+            f"  p-value: {result['p_value']:.6f}",
+            f"  Diferencia significativa: {'SI' if result['significant'] else 'NO'} (alpha=0.05)",
+        ])
+        if result['significant']:
+            lines.append("  => Las distribuciones categoricas son diferentes. Las columnas NO son equivalentes.")
+        else:
+            lines.append("  => No hay diferencia significativa. Las distribuciones podrian ser equivalentes.")
+
+    else:
+        return f"test_type invalido: '{test_type}'. Usa 'auto', 'ttest' o 'chi2'."
+
+    return "\n".join(lines)
+
+
+def tool_correlation(source_db: str, column_a: str, column_b: str, method: str = "pearson") -> str:
+    """Calcula correlacion entre dos columnas del mismo dataset. Sin LLM."""
+    csv_path = _find_csv_for_source_db(source_db)
+    if not csv_path:
+        return f"No se encontro CSV para '{source_db}'"
+
+    vals_a, err_a = _extract_all_values(csv_path, column_a)
+    if err_a is not None:
+        return f"Columna '{column_a}' no encontrada en {source_db}. Columnas: {', '.join(err_a)}"
+    vals_b, err_b = _extract_all_values(csv_path, column_b)
+    if err_b is not None:
+        return f"Columna '{column_b}' no encontrada en {source_db}. Columnas: {', '.join(err_b)}"
+
+    # Truncate to same length
+    n = min(len(vals_a), len(vals_b))
+    if n < 3:
+        return f"Insuficientes valores para correlacion (n={n}). Necesario >= 3."
+
+    from semantic_tools.statistics import _to_float_list
+    num_a = _to_float_list(vals_a[:n])
+    num_b = _to_float_list(vals_b[:n])
+
+    if len(num_a) < n * 0.8 or len(num_b) < n * 0.8:
+        return f"Una o ambas columnas no son suficientemente numericas (A: {len(num_a)}/{n}, B: {len(num_b)}/{n})."
+
+    # Align by index (only pairs where both are numeric)
+    pairs = [(a, b) for a, b in zip(num_a, num_b) if a is not None and b is not None]
+    if len(pairs) < 3:
+        return f"Insuficientes pares numericos validos ({len(pairs)}). Necesario >= 3."
+
+    clean_a = [p[0] for p in pairs]
+    clean_b = [p[1] for p in pairs]
+
+    if method == "pearson":
+        result = st_pearson(clean_a, clean_b)
+    elif method == "spearman":
+        result = st_spearman(clean_a, clean_b)
+    else:
+        return f"method invalido: '{method}'. Usa 'pearson' o 'spearman'."
+
+    lines = [
+        f"Correlacion {method}: {source_db}.{column_a} vs {source_db}.{column_b}",
+        f"  Pares validos: {len(pairs)}/{n}",
+        f"  Coeficiente r: {result['r']:.4f}",
+        f"  Interpretacion: {result['verdict']}",
+    ]
+    abs_r = abs(result['r'])
+    if abs_r >= 0.7:
+        lines.append("  => Correlacion fuerte. Las variables estan estrechamente relacionadas.")
+    elif abs_r >= 0.4:
+        lines.append("  => Correlacion moderada. Relacion parcial.")
+    else:
+        lines.append("  => Correlacion debil o nula. Las variables son independientes.")
+
+    return "\n".join(lines)
+
+
+def tool_distribution_summary(source_db: str, column_name: str) -> str:
+    """Resume la distribucion de una columna (media, mediana, std, cuartiles, cardinalidad). Sin LLM."""
+    csv_path = _find_csv_for_source_db(source_db)
+    if not csv_path:
+        return f"No se encontro CSV para '{source_db}'"
+
+    vals, err = _extract_all_values(csv_path, column_name)
+    if err is not None:
+        return f"Columna '{column_name}' no encontrada en {source_db}. Columnas: {', '.join(err)}"
+
+    if not vals:
+        return f"Columna '{column_name}' esta vacia en {source_db}."
+
+    result = st_distribution_summary(vals)
+    lines = [
+        f"Distribucion: {source_db}.{column_name}",
+        f"  Total: {result['count']} | Unicos: {result['unique']} | Missing: {result['missing']}",
+    ]
+
+    if result["type"] == "numeric":
+        lines.extend([
+            f"  Tipo: numerico",
+            f"  Media: {result['mean']:.4f} | Mediana: {result['median']:.4f}",
+            f"  Std: {result['std']:.4f} | Min: {result['min']:.4f} | Max: {result['max']:.4f}",
+            f"  Q1: {result['q1']:.4f} | Q3: {result['q3']:.4f}",
+        ])
+    else:
+        top_vals = ', '.join(f'{v}({c})' for v, c in list(result.get('top_5', {}).items())[:5])
+        lines.extend([
+            f"  Tipo: categorico",
+            f"  Cardinalidad: {result['unique']}",
+            f"  Top valores: {top_vals}",
+        ])
+
+    return "\n".join(lines)
+
+
+def tool_cluster_columns(source_db: str, k: str = "auto") -> str:
+    """Agrupa columnas de un dataset por perfil estructural (k-means). Sin LLM."""
+    csv_path = _find_csv_for_source_db(source_db)
+    if not csv_path:
+        return f"No se encontro CSV para '{source_db}'"
+
+    with open(csv_path, "r", encoding="utf-8-sig", errors="replace") as f:
+        reader = csv.DictReader(f)
+        headers = reader.fieldnames or []
+        if not headers:
+            return f"CSV '{source_db}' no tiene columnas."
+        rows = list(reader)
+
+    # Build column -> values mapping
+    columns = {}
+    for h in headers:
+        columns[h] = [row.get(h, "") for row in rows]
+
+    if not columns:
+        return f"No se pudieron extraer columnas de {source_db}."
+
+    # Determine k
+    n_cols = len(columns)
+    if k == "auto":
+        # Build feature vectors and find optimal k
+        from semantic_tools.clustering import column_profile as _cp
+        feature_vectors = [_cp(columns[h])["features"] for h in columns]
+        max_k = min(n_cols, 6)
+        if max_k <= 2:
+            k_num = 1
+        else:
+            ok_result = st_optimal_k(feature_vectors, k_max=max_k)
+            k_num = ok_result["optimal_k"]
+        k_str = f"auto (optimal_k={k_num})"
+    else:
+        try:
+            k_num = int(k)
+        except ValueError:
+            return f"k invalido: '{k}'. Usa 'auto' o un numero entero."
+        k_str = str(k_num)
+
+    result = st_cluster_columns(columns, k=k_num)
+
+    lines = [
+        f"Clustering de columnas: {source_db}",
+        f"  Columnas: {n_cols} | k={k_str} | iteraciones: {result['iterations']}",
+        f"  Inertia: {result['inertia']:.4f}",
+        "",
+    ]
+
+    for cluster in result["clusters"]:
+        lines.append(f"  Cluster {cluster['cluster_id']} ({cluster['size']} cols): {', '.join(cluster['members'])}")
+        centroid = cluster['centroid']
+        notable = []
+        if centroid.get('numeric_ratio', 0) > 0.7:
+            notable.append("numerico")
+        if centroid.get('cardinality_ratio', 0) > 0.8:
+            notable.append("alta cardinalidad")
+        if centroid.get('missing_ratio', 0) > 0.3:
+            notable.append(f"missing {centroid['missing_ratio']:.0%}")
+        if centroid.get('has_dates', 0) > 0.5:
+            notable.append("fechas")
+        if notable:
+            lines.append(f"    Perfil: {', '.join(notable)}")
+
+    return "\n".join(lines)
+
+
+def tool_column_quality(source_db: str, column_name: str) -> str:
+    """Detecta anomalias y calcula score de calidad (0-100) de una columna. Sin LLM."""
+    csv_path = _find_csv_for_source_db(source_db)
+    if not csv_path:
+        return f"No se encontro CSV para '{source_db}'"
+
+    vals, err = _extract_all_values(csv_path, column_name)
+    if err is not None:
+        return f"Columna '{column_name}' no encontrada en {source_db}. Columnas: {', '.join(err)}"
+
+    if not vals:
+        return f"Columna '{column_name}' esta vacia en {source_db}."
+
+    # Quality score
+    score_result = st_column_quality_score(vals)
+
+    # Anomaly detection
+    from semantic_tools.statistics import _to_float_list
+    num_vals = _to_float_list(vals)
+    is_numeric = len(num_vals) > len(vals) * 0.8
+
+    lines = [
+        f"Calidad de datos: {source_db}.{column_name}",
+        f"  Score: {score_result['score']}/100 (Grade: {score_result['grade']})",
+        f"  Completitud: {score_result['completeness']:.0%} | Consistencia: {score_result['consistency']:.0%} | Validez: {score_result['validity']:.0%}",
+    ]
+
+    if score_result["issues"]:
+        lines.append(f"  Issues: {'; '.join(score_result['issues'])}")
+
+    # Anomaly details
+    if is_numeric and len(num_vals) >= 4:
+        anomaly_result = st_detect_numeric_anomalies(vals, method="iqr")
+        if anomaly_result["anomaly_count"] > 0:
+            lines.append(f"  Anomalias (IQR): {anomaly_result['anomaly_count']} ({anomaly_result['anomaly_ratio']:.1%})")
+            lines.append(f"  Bounds: [{anomaly_result['bounds']['lower']:.4f}, {anomaly_result['bounds']['upper']:.4f}]")
+            for a in anomaly_result["anomalies"][:5]:
+                lines.append(f"    - idx={a['index']}: {a['value']} ({a['reason']})")
+            if anomaly_result["anomaly_count"] > 5:
+                lines.append(f"    ... y {anomaly_result['anomaly_count'] - 5} mas")
+    else:
+        cat_result = st_detect_categorical_anomalies(vals)
+        if cat_result["rare_values"]:
+            lines.append(f"  Valores raros: {len(cat_result['rare_values'])}")
+            for r in cat_result["rare_values"][:3]:
+                lines.append(f"    - '{r['value']}' (freq={r['freq']})")
+        if cat_result["high_cardinality"]:
+            lines.append(f"  Alta cardinalidad: {cat_result['cardinality']} valores unicos")
+        if cat_result["suspicious_patterns"]:
+            lines.append(f"  Patrones sospechosos: {len(cat_result['suspicious_patterns'])}")
+            for p in cat_result["suspicious_patterns"][:3]:
+                lines.append(f"    - idx={p['index']}: {p['issues']}")
+
+    if score_result["grade"] in ("D", "F"):
+        lines.append("  => Calidad baja. Recomendado usar auto_clean antes de interoperabilidad.")
+    elif score_result["grade"] == "C":
+        lines.append("  => Calidad media. Revisar issues antes de usar.")
+    else:
+        lines.append("  => Calidad aceptable para interoperabilidad.")
+
+    return "\n".join(lines)
+
+
+def tool_auto_clean(source_db: str, column_name: str) -> str:
+    """Limpia una columna (whitespace, encoding, fill missing) y muestra los cambios. Sin LLM."""
+    csv_path = _find_csv_for_source_db(source_db)
+    if not csv_path:
+        return f"No se encontro CSV para '{source_db}'"
+
+    vals, err = _extract_all_values(csv_path, column_name)
+    if err is not None:
+        return f"Columna '{column_name}' no encontrada en {source_db}. Columnas: {', '.join(err)}"
+
+    if not vals:
+        return f"Columna '{column_name}' esta vacia en {source_db}."
+
+    result = st_auto_clean(vals)
+
+    lines = [
+        f"Auto-clean: {source_db}.{column_name}",
+        f"  Valores procesados: {len(vals)} | Cambios: {result['total_changes']}",
+        f"  Fixes aplicados: {', '.join(result['fixes_applied']) if result['fixes_applied'] else 'ninguno'}",
+    ]
+
+    if result["changes"]:
+        lines.append("  Detalle de cambios (primeros 10):")
+        for c in result["changes"][:10]:
+            lines.append(f"    - idx={c['index']}: '{c['original']}' -> '{c['cleaned']}' ({', '.join(c['fixes'])})")
+        if result["total_changes"] > 10:
+            lines.append(f"    ... y {result['total_changes'] - 10} mas")
+    else:
+        lines.append("  No se requirieron cambios. Columna limpia.")
+
+    return "\n".join(lines)
+
+
+def tool_profile_dataset(source_db: str) -> str:
+    """Perfila todas las columnas de un dataset en un solo paso. Sin LLM."""
+    csv_path = _find_csv_for_source_db(source_db)
+    if not csv_path:
+        return f"No se encontro CSV para '{source_db}'"
+    result = st_profile_csv(csv_path)
+    return st_format_profile(result)
+
+
+def tool_auto_match(source_db_a: str, source_db_b: str) -> str:
+    """Matchea automaticamente columnas entre dos datasets en batch. Sin LLM.
+
+    Ejecuta similarity + statistics + quality en todos los pares de columnas.
+    Retorna mapeos con score de confianza: high (>=0.7), medium (0.4-0.7), low (<0.4).
+    Los de alta confianza se persisten en el grafo automaticamente.
+    Los de confianza media se escalan a ask_human.
+    """
+    csv_a = _find_csv_for_source_db(source_db_a)
+    csv_b = _find_csv_for_source_db(source_db_b)
+    if not csv_a:
+        return f"No se encontro CSV para '{source_db_a}'"
+    if not csv_b:
+        return f"No se encontro CSV para '{source_db_b}'"
+
+    result = st_auto_match(csv_a, csv_b)
+    output = st_format_match(result)
+
+    # Persist high-confidence mappings to the graph
+    high = result.get("high_confidence", [])
+    if high:
+        output += "\n\n=== PERSISTENCIA AUTOMATICA ===\n"
+        g = load_graph_cached()
+        all_fields = g.list_fields()
+        persisted = 0
+        for m in high:
+            col_a = m["column_a"]
+            col_b = m["column_b"]
+            # Find field nodes for both columns
+            fields_a = [f for f in all_fields if f.get("source_db", "") == source_db_a and f.get("column", "").lower().replace(" ", "_") == col_a.lower().replace(" ", "_")]
+            fields_b = [f for f in all_fields if f.get("source_db", "") == source_db_b and f.get("column", "").lower().replace(" ", "_") == col_b.lower().replace(" ", "_")]
+            if fields_a and fields_b:
+                for fa in fields_a:
+                    for fb in fields_b:
+                        try:
+                            g.graph.add_edge(fa["id"], fb["id"], type=EdgeType.EQUIVALE_A.value, source="auto_match")
+                            g._db_upsert_edge(fa["id"], fb["id"], EdgeType.EQUIVALE_A.value, {"source": "auto_match"})
+                            persisted += 1
+                        except Exception:
+                            pass
+        if persisted > 0:
+            from .graph.catalog import _NOMENCLADOR_PATH
+            g.save(str(_NOMENCLADOR_PATH))
+            clear_graph_cache()
+            try:
+                from .lifecycle import log_event
+                log_event(f"{source_db_a}::{source_db_b}", "equivalence_created", actor="agent",
+                          reason=f"auto_match persistió {persisted} aristas EQUIVALE_A",
+                          details=f"source_db_a={source_db_a}, source_db_b={source_db_b}")
+            except Exception:
+                pass
+            output += f"  {persisted} aristas EQUIVALE_A persistidas en el grafo.\n"
+        else:
+            output += "  No se encontraron field nodes en el grafo para persistir. Ingesta los datasets primero.\n"
+
+    # Escalate medium-confidence to human
+    medium = result.get("medium_confidence", [])
+    if medium:
+        output += f"\n=== REVISION HUMANA REQUERIDA ({len(medium)} mapeos ambiguos) ===\n"
+        for m in medium[:5]:
+            output += f"  {m['column_a']} <-> {m['column_b']} (conf={m['confidence']:.2f})\n"
+        if len(medium) > 5:
+            output += f"  ... y {len(medium) - 5} mas. Usa ask_human para resolver.\n"
+
+    return output
+
+
+# === LEARNING LOOP: recall de feedback ===
+
+def tool_recall_feedback(query: str) -> str:
+    """Recupera decisiones pasadas del decision log relevantes para la consulta.
+
+    Busca rechazos, aprobaciones y cambios de estado que coincidan con
+    palabras clave de la consulta. Prioriza feedback humano (rejected/approved).
+    """
+    events = lifecycle_recall_feedback(query, limit=5)
+    if not events:
+        return "No hay decisiones pasadas relevantes para esta consulta."
+
+    lines = [f"Decisiones pasadas relevantes ({len(events)}):"]
+    for e in events:
+        actor_tag = "humano" if e["actor"] == "human" else "auto"
+        concept_short = e["concept_id"].replace("concept:", "")
+        reason = e["reason"] or "(sin razon)"
+        lines.append(f"  [{e['timestamp'][:10]}] {e['action']} ({actor_tag}) — {concept_short}: {reason}")
+
+    return "\n".join(lines)
+
+
+# === COMMUNITY DETECTION + GLOBAL SEARCH (inspirado en GraphRAG) ===
+
+def tool_detect_communities(resolution: str = "1.0") -> str:
+    """Detecta comunidades de variables relacionadas usando Louvain. Sin LLM."""
+    try:
+        res = float(resolution)
+    except (ValueError, TypeError):
+        res = 1.0
+    g = load_graph_cached()
+    communities = g.detect_communities(resolution=res)
+    if not communities:
+        return "No hay suficientes nodos en el grafo para detectar comunidades. Ingesta datasets primero."
+    lines = [f"Comunidades detectadas: {len(communities)} (Louvain, resolution={res})"]
+    for c in communities[:10]:
+        names = ", ".join(c["member_names"][:8])
+        if len(c["member_names"]) > 8:
+            names += f" ... (+{len(c['member_names']) - 8})"
+        lines.append(f"  Comunidad {c['community_id']}: {c['size']} nodos ({c['dominant_type']}) — {names}")
+    if len(communities) > 10:
+        lines.append(f"  ... y {len(communities) - 10} comunidades mas.")
+    lines.append("\nUsa global_search para hacer preguntas globales sobre el nomenclador usando estas comunidades.")
+    return "\n".join(lines)
+
+
+def tool_global_search(query: str) -> str:
+    """Busqueda global sobre el nomenclador usando community reports + LLM (emula GraphRAG).
+
+    Detecta comunidades con Louvain, genera un resumen de cada una con LLM,
+    y sintetiza una respuesta global a la pregunta del usuario.
+    Usa para preguntas globales como 'que areas tematicas cubre el nomenclador?'
+    o 'hay brechas de cobertura en datos de salud?'.
+    """
+    g = load_graph_cached()
+    return g.global_search(query)
+
+
+def tool_community_reports(resolution: str = "1.0") -> str:
+    """Genera reportes narrativos de cada comunidad usando LLM. Emula GraphRAG community summarization."""
+    try:
+        res = float(resolution)
+    except (ValueError, TypeError):
+        res = 1.0
+    g = load_graph_cached()
+    reports = g.get_community_reports(resolution=res)
+    if not reports:
+        return "No hay suficientes nodos para generar community reports."
+    lines = [f"Community reports ({len(reports)} comunidades):"]
+    for r in reports:
+        lines.append(f"\n--- Comunidad {r['community_id']} ({r['size']} nodos, {r['dominant_type']}) ---")
+        lines.append(r["report"])
+    return "\n".join(lines)
+
+
 # === TOOL DISPATCHER ===
 
 TOOLS = {
+    "recall_feedback": tool_recall_feedback,
     "search_graph": tool_search_graph,
     "detect_standard": tool_detect_standard,
     "validate_interop": tool_validate_interop,
@@ -885,9 +1433,21 @@ TOOLS = {
     "semantic_similarity": tool_semantic_similarity,
     "text_similarity": tool_text_similarity,
     "composite_similarity": tool_composite_similarity,
+    "compare_distributions": tool_compare_distributions,
+    "correlation": tool_correlation,
+    "distribution_summary": tool_distribution_summary,
+    "cluster_columns": tool_cluster_columns,
+    "column_quality": tool_column_quality,
+    "auto_clean": tool_auto_clean,
+    "profile_dataset": tool_profile_dataset,
+    "auto_match": tool_auto_match,
+    "detect_communities": tool_detect_communities,
+    "global_search": tool_global_search,
+    "community_reports": tool_community_reports,
 }
 
 TOOLS_SCHEMA = {
+    "recall_feedback": {"query": "str"},
     "search_graph": {"query": "str"},
     "detect_standard": {"column_name": "str", "sample_values": "list[str]"},
     "validate_interop": {"source_db": "str", "target_db": "str"},
@@ -911,10 +1471,22 @@ TOOLS_SCHEMA = {
     "semantic_similarity": {"source_db_a": "str", "column_a": "str", "source_db_b": "str", "column_b": "str"},
     "text_similarity": {"concept_a": "str", "concept_b": "str"},
     "composite_similarity": {"source_db_a": "str", "column_a": "str", "source_db_b": "str", "column_b": "str"},
+    "compare_distributions": {"source_db_a": "str", "column_a": "str", "source_db_b": "str", "column_b": "str", "test_type": "str"},
+    "correlation": {"source_db": "str", "column_a": "str", "column_b": "str", "method": "str"},
+    "distribution_summary": {"source_db": "str", "column_name": "str"},
+    "cluster_columns": {"source_db": "str", "k": "str"},
+    "column_quality": {"source_db": "str", "column_name": "str"},
+    "auto_clean": {"source_db": "str", "column_name": "str"},
+    "profile_dataset": {"source_db": "str"},
+    "auto_match": {"source_db_a": "str", "source_db_b": "str"},
+    "detect_communities": {"resolution": "str"},
+    "global_search": {"query": "str"},
+    "community_reports": {"resolution": "str"},
 }
 
 # Descripciones de tools para el schema OpenAI
 _TOOL_DESCRIPTIONS = {
+    "recall_feedback": "Recupera decisiones pasadas del decision log relevantes para una consulta. Retorna rechazos, aprobaciones y cambios de estado con razon. Usa ANTES de proponer un mapeo o crear un concepto para verificar si ya hubo decisiones humanas sobre el tema.",
     "search_graph": "Busca una variable en el nomenclador. Retorna concepto canonico + fuentes con quality_score y review_status.",
     "detect_standard": "Detecta el estandar para una columna dado su nombre y valores muestra.",
     "validate_interop": "Verifica interoperabilidad entre dos fuentes con guardrails (poblacion, metodologia, clasificador, distribucion).",
@@ -938,6 +1510,17 @@ _TOOL_DESCRIPTIONS = {
     "semantic_similarity": "Compara dos columnas cuantitativamente (cosine, jaccard, overlap) sin LLM. Determinista y gratuito. Usa como pre-filtro antes de compare_value_sets.",
     "text_similarity": "Compara definiciones de dos conceptos via TF-IDF sin LLM. Determinista. Usa para verificar si dos conceptos son el mismo.",
     "composite_similarity": "Combina similitud de valores (cosine, jaccard, overlap) + similitud de texto (TF-IDF) en un solo score. Sin LLM. Usa para evaluacion completa de equivalencia.",
+    "compare_distributions": "Compara dos columnas con pruebas estadisticas (Welch t-test para numericas, chi-square para categoricas). Auto-detecta el tipo. Sin LLM. Usa para verificar si dos columnas tienen la misma distribucion.",
+    "correlation": "Calcula correlacion (Pearson o Spearman) entre dos columnas del mismo dataset. Sin LLM. Usa para detectar relaciones entre variables.",
+    "distribution_summary": "Resume la distribucion de una columna: media, mediana, std, cuartiles (numericas) o cardinalidad y top valores (categoricas). Sin LLM.",
+    "cluster_columns": "Agrupa columnas de un dataset por perfil estructural usando k-means. Auto-detecta k optimo via elbow method. Sin LLM. Usa para descubrir columnas similares dentro de un dataset.",
+    "column_quality": "Detecta anomalias (outliers IQR, valores raros, encoding artifacts) y calcula score de calidad 0-100 con grade A-F. Sin LLM. Usa ANTES de recomendar interoperabilidad.",
+    "auto_clean": "Limpia una columna: trim whitespace, fix encoding mojibake, fill valores faltantes (median/mean). Sin LLM. Usa despues de column_quality si hay issues.",
+    "profile_dataset": "Perfila todas las columnas de un dataset en un solo paso: tipo semantico, cardinalidad, missing, patrones, calidad, estadisticas. Sin LLM. Usa ANTES de comparar dos datasets.",
+    "auto_match": "Matchea automaticamente todas las columnas entre dos datasets en batch: similarity + statistics + quality + confidence score. Alta confianza (>=0.7) se persiste en el grafo, media (0.4-0.7) escala a humano, baja se descarta. Sin LLM. Usa despues de profile_dataset.",
+    "detect_communities": "Detecta comunidades de variables relacionadas usando Louvain (algoritmo de community detection). Agrupa conceptos, fields y clasificadores densamente conectados. Sin LLM. Usa para entender la estructura tematica del nomenclador.",
+    "global_search": "Busqueda global sobre el nomenclador: detecta comunidades, genera reportes con LLM, y sintetiza una respuesta global. Emula GraphRAG Global Search. Usa para preguntas transversales como 'que areas tematicas cubre el nomenclador?' o 'hay brechas de cobertura?'.",
+    "community_reports": "Genera un resumen narrativo de cada comunidad del nomenclador usando LLM. Emula GraphRAG community summarization. Usa para obtener una vision general de las areas tematicas y como se relacionan.",
 }
 
 # Mapeo de tipos Python a tipos OpenAI
@@ -952,6 +1535,7 @@ _PY_TO_OPENAI_TYPE = {
 
 def _build_openai_tools_schema() -> list[dict]:
     """Generar schema de tools en formato OpenAI function calling desde TOOLS_SCHEMA."""
+    _OPTIONAL_PARAMS = {"dry_run", "test_type", "k", "method", "resolution"}
     tools = []
     for name, params in TOOLS_SCHEMA.items():
         properties = {}
@@ -962,7 +1546,8 @@ def _build_openai_tools_schema() -> list[dict]:
             if openai_type == "array":
                 prop["items"] = {"type": "string"}
             properties[param_name] = prop
-            required.append(param_name)
+            if param_name not in _OPTIONAL_PARAMS:
+                required.append(param_name)
 
         tool = {
             "type": "function",
@@ -1017,9 +1602,22 @@ def think_node(state: AgentState) -> AgentState:
                     summary_lines.append(f"  - {line[7:].strip()}")
         summary_text = f"\n\nAcciones anteriores (resumen):\n" + "\n".join(summary_lines) + "\n"
 
+    # LEARNING LOOP: inyectar feedback pasado relevante (solo en primera iteracion)
+    feedback_text = ""
+    if state.get("iteration", 0) == 0:
+        past_events = lifecycle_recall_feedback(state["user_query"], limit=3)
+        if past_events:
+            fb_lines = []
+            for e in past_events:
+                actor_tag = "humano" if e["actor"] == "human" else "auto"
+                concept_short = e["concept_id"].replace("concept:", "")
+                reason = e["reason"] or "(sin razon)"
+                fb_lines.append(f"  [{e['timestamp'][:10]}] {e['action']} ({actor_tag}) — {concept_short}: {reason}")
+            feedback_text = f"\n\nDECISIONES PREVIAS RELEVANTES (learning loop):\n" + "\n".join(fb_lines) + "\nConsidera este feedback antes de actuar.\n"
+
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT},
-        {"role": "user", "content": f"Pregunta del usuario: {state['user_query']}{summary_text}\n\n¿Qué haces ahora?"},
+        {"role": "user", "content": f"Pregunta del usuario: {state['user_query']}{feedback_text}{summary_text}\n\n¿Qué haces ahora?"},
     ]
 
     # Solo incluir mensajes de los ultimos 3 turnos (detalle completo)
@@ -1127,10 +1725,21 @@ def act_node(state: AgentState) -> AgentState:
         result = f"Error ejecutando {action}: {e}"
 
     # Construir mensaje tool para feed-back al LLM en el proximo think
+    result_str = str(result)
+    if len(result_str) > 2000:
+        cut = result_str.rfind('}', 0, 2000)
+        if cut > 100:
+            result_str = result_str[:cut + 1] + "\n... (truncado)"
+        else:
+            cut = result_str.rfind('\n', 0, 2000)
+            if cut > 100:
+                result_str = result_str[:cut] + "\n... (truncado)"
+            else:
+                result_str = result_str[:2000] + "... (truncado)"
     tool_msg = {
         "role": "tool",
         "tool_call_id": tool_call_id,
-        "content": str(result)[:2000],
+        "content": result_str,
     }
 
     messages = state.get("messages", [])
@@ -1323,27 +1932,29 @@ def _parse_response(text: str) -> dict:
     """Parsear respuesta ReAct en formato texto (Thought/Action/Action Input/Final).
 
     Usado por moa_agent.py que aun usa el patron ReAct textual.
+    Case-insensitive: acepta THOUGHT/thought/Thought, ACTION/action/Action, etc.
+    Acepta tanto 'Final Answer:' como 'FINAL:' como marca de respuesta final.
     """
     result = {"thought": "", "action": "", "action_input": "", "final": ""}
 
-    # Final Answer
-    final_match = re.search(r"Final Answer:\s*(.*?)(?:\n[A-Z]|\Z)", text, re.DOTALL)
+    # Final Answer o FINAL (case-insensitive)
+    final_match = re.search(r"(?:Final Answer|FINAL):\s*(.*?)(?:\n[A-Z]|\Z)", text, re.DOTALL | re.IGNORECASE)
     if final_match:
         result["final"] = final_match.group(1).strip()
         return result
 
-    # Thought
-    thought_match = re.search(r"Thought:\s*(.*?)(?:\nAction:|\Z)", text, re.DOTALL)
+    # Thought (case-insensitive)
+    thought_match = re.search(r"THOUGHT:\s*(.*?)(?:\nACTION:|\Z)", text, re.DOTALL | re.IGNORECASE)
     if thought_match:
         result["thought"] = thought_match.group(1).strip()
 
-    # Action
-    action_match = re.search(r"Action:\s*(.*?)(?:\nAction Input:|\Z)", text, re.DOTALL)
+    # Action (case-insensitive, terminador acepta espacio o underscore)
+    action_match = re.search(r"ACTION:\s*(.*?)(?:\nACTION[\s_]+INPUT:|\Z)", text, re.DOTALL | re.IGNORECASE)
     if action_match:
         result["action"] = action_match.group(1).strip()
 
-    # Action Input
-    input_match = re.search(r"Action Input:\s*(.*?)(?:\nObservation:|\nThought:|\Z)", text, re.DOTALL)
+    # Action Input o ACTION_INPUT (case-insensitive, acepta espacio o underscore)
+    input_match = re.search(r"ACTION[\s_]+INPUT:\s*(.*?)(?:\nObservation:|\nThought:|\nTHOUGHT:|\Z)", text, re.DOTALL | re.IGNORECASE)
     if input_match:
         result["action_input"] = input_match.group(1).strip()
 

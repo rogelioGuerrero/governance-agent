@@ -277,3 +277,60 @@ def find_pending_reviews() -> list[dict]:
         if last_review in ("proposed", "review_started"):
             result.append({"concept_id": concept_id, "review_status": ACTION_TO_REVIEW_STATUS.get(last_review, last_review)})
     return result
+
+
+# === LEARNING LOOP: recall de feedback pasado ===
+
+def recall_feedback(query: str, limit: int = 5) -> list[dict]:
+    """Recuperar decisiones pasadas relevantes para una consulta.
+
+    Busca en el decision_log eventos donde el concept_id o la razon
+    coincidan con palabras clave de la consulta. Prioriza:
+    1. Rechazos humanos (feedback negativo — el mas valioso para aprender)
+    2. Aprobaciones humanas (feedback positivo)
+    3. Cambios de estado (deprecation, reactivacion)
+
+    Args:
+        query: Consulta del usuario o nombre de concepto
+        limit: Maximo de eventos a retornar
+
+    Returns:
+        Lista de dicts: concept_id, action, actor, reason, timestamp
+    """
+    data = _load_log()
+    all_entries = data.get("entries", {})
+    if not all_entries:
+        return []
+
+    query_lower = query.lower().strip()
+    keywords = {w for w in query_lower.replace("_", " ").split() if len(w) > 2}
+    if not keywords:
+        return []
+
+    results = []
+    for concept_id, entries in all_entries.items():
+        concept_lower = concept_id.lower().replace("concept:", "")
+        concept_words = set(concept_lower.replace("_", " ").split())
+        concept_match = keywords & concept_words
+
+        for e in entries:
+            reason_lower = (e.get("reason") or "").lower()
+            reason_match = any(kw in reason_lower for kw in keywords)
+
+            if not concept_match and not reason_match:
+                continue
+
+            results.append({
+                "concept_id": concept_id,
+                "action": e.get("action", ""),
+                "actor": e.get("actor", ""),
+                "reason": e.get("reason", ""),
+                "timestamp": e.get("timestamp", ""),
+            })
+
+    priority = {"rejected": 0, "approved": 1, "deprecated": 2, "reactivated": 3}
+    results.sort(key=lambda r: (
+        priority.get(r["action"], 9),
+        r["timestamp"],
+    ))
+    return results[:limit]

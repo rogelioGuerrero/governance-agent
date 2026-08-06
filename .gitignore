@@ -16,3 +16,36 @@ wheels/
 nomenclador/
 transforms/
 .anon_salt
+
+# IDE
+.windsurf/
+.vscode/
+.idea/
+
+# Data / datasets (no subir datos reales)
+data/
+datasets/
+supabase/
+
+# Reports / temp artifacts
+reports/
+docs/reportes/
+*.log
+
+# Exploration / scratch files
+articulo_governance_demo.md
+deep_dive_real.md
+discover_real.md
+discover_real_v2.md
+discover_real_v3.md
+interop_report.md
+validation_report.md
+expert_review.py
+expert_review_groq.txt
+expert_review_prompt.txt
+poc_smolagents.py
+AGENTS.md
+
+# Test artifacts
+.pytest_cache/
+tests/eval_results.json

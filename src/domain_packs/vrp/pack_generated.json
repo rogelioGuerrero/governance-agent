@@ -1,0 +1,468 @@
+{
+  "name": "vrp",
+  "version": "1.0.0",
+  "description": "Vehicle Routing Problem - optimización de rutas con OR-Tools",
+  "schema_fields": {
+    "locations": {
+      "name": "locations",
+      "type": "array",
+      "required": true,
+      "min": null,
+      "max": null,
+      "pattern": null,
+      "enum": null,
+      "description": "Lista de ubicaciones (incluye depósitos)",
+      "aliases": []
+    },
+    "locations.id": {
+      "name": "locations.id",
+      "type": "string",
+      "required": true,
+      "min": null,
+      "max": null,
+      "pattern": null,
+      "enum": null,
+      "description": "Identificador único",
+      "aliases": []
+    },
+    "locations.name": {
+      "name": "locations.name",
+      "type": "string",
+      "required": false,
+      "min": null,
+      "max": null,
+      "pattern": null,
+      "enum": null,
+      "description": "Nombre descriptivo",
+      "aliases": []
+    },
+    "locations.coords": {
+      "name": "locations.coords",
+      "type": "array",
+      "required": true,
+      "min": null,
+      "max": null,
+      "pattern": null,
+      "enum": null,
+      "description": "[lat, lng] — orden backend",
+      "aliases": []
+    },
+    "locations.type": {
+      "name": "locations.type",
+      "type": "string",
+      "required": false,
+      "min": null,
+      "max": null,
+      "pattern": null,
+      "enum": [
+        "depot",
+        "pickup",
+        "delivery",
+        "service"
+      ],
+      "description": "",
+      "aliases": []
+    },
+    "locations.external_id": {
+      "name": "locations.external_id",
+      "type": "string",
+      "required": false,
+      "min": null,
+      "max": null,
+      "pattern": null,
+      "enum": null,
+      "description": "ID del sistema externo/cliente",
+      "aliases": []
+    },
+    "locations.service_time": {
+      "name": "locations.service_time",
+      "type": "integer",
+      "required": false,
+      "min": null,
+      "max": null,
+      "pattern": null,
+      "enum": null,
+      "description": "Tiempo de servicio en segundos",
+      "aliases": []
+    },
+    "locations.time_windows": {
+      "name": "locations.time_windows",
+      "type": "array",
+      "required": false,
+      "min": null,
+      "max": null,
+      "pattern": null,
+      "enum": null,
+      "description": "Ventanas de tiempo permitidas",
+      "aliases": []
+    },
+    "locations.weight_demand": {
+      "name": "locations.weight_demand",
+      "type": "float",
+      "required": false,
+      "min": null,
+      "max": null,
+      "pattern": null,
+      "enum": null,
+      "description": "Demanda de peso (negativo para entregas, positivo para recogidas)",
+      "aliases": []
+    },
+    "locations.volumeDemand": {
+      "name": "locations.volumeDemand",
+      "type": "float",
+      "required": false,
+      "min": null,
+      "max": null,
+      "pattern": null,
+      "enum": null,
+      "description": "Demanda de volumen",
+      "aliases": []
+    },
+    "locations.required_skills": {
+      "name": "locations.required_skills",
+      "type": "array",
+      "required": false,
+      "min": null,
+      "max": null,
+      "pattern": null,
+      "enum": null,
+      "description": "Skills requeridas para atender este nodo",
+      "aliases": []
+    },
+    "locations.priority": {
+      "name": "locations.priority",
+      "type": "string",
+      "required": false,
+      "min": null,
+      "max": null,
+      "pattern": null,
+      "enum": null,
+      "description": "Prioridad: H (alta), M (media), L (baja)",
+      "aliases": []
+    },
+    "vehicles": {
+      "name": "vehicles",
+      "type": "array",
+      "required": true,
+      "min": null,
+      "max": null,
+      "pattern": null,
+      "enum": null,
+      "description": "Lista de vehículos",
+      "aliases": []
+    },
+    "vehicles.id": {
+      "name": "vehicles.id",
+      "type": "string",
+      "required": true,
+      "min": null,
+      "max": null,
+      "pattern": null,
+      "enum": null,
+      "description": "Identificador único",
+      "aliases": []
+    },
+    "vehicles.name": {
+      "name": "vehicles.name",
+      "type": "string",
+      "required": false,
+      "min": null,
+      "max": null,
+      "pattern": null,
+      "enum": null,
+      "description": "Nombre descriptivo",
+      "aliases": []
+    },
+    "vehicles.start_location_id": {
+      "name": "vehicles.start_location_id",
+      "type": "string",
+      "required": true,
+      "min": null,
+      "max": null,
+      "pattern": null,
+      "enum": null,
+      "description": "ID de ubicación de inicio",
+      "aliases": []
+    },
+    "vehicles.end_location_id": {
+      "name": "vehicles.end_location_id",
+      "type": "string",
+      "required": false,
+      "min": null,
+      "max": null,
+      "pattern": null,
+      "enum": null,
+      "description": "ID de ubicación de fin (default = start)",
+      "aliases": []
+    },
+    "vehicles.weight_capacity": {
+      "name": "vehicles.weight_capacity",
+      "type": "float",
+      "required": false,
+      "min": null,
+      "max": null,
+      "pattern": null,
+      "enum": null,
+      "description": "Capacidad máxima de peso",
+      "aliases": []
+    },
+    "vehicles.volume_capacity": {
+      "name": "vehicles.volume_capacity",
+      "type": "float",
+      "required": false,
+      "min": null,
+      "max": null,
+      "pattern": null,
+      "enum": null,
+      "description": "Capacidad máxima de volumen",
+      "aliases": []
+    },
+    "vehicles.skills": {
+      "name": "vehicles.skills",
+      "type": "array",
+      "required": false,
+      "min": null,
+      "max": null,
+      "pattern": null,
+      "enum": null,
+      "description": "Skills que posee el vehículo",
+      "aliases": []
+    },
+    "vehicles.start_time": {
+      "name": "vehicles.start_time",
+      "type": "integer",
+      "required": false,
+      "min": null,
+      "max": null,
+      "pattern": null,
+      "enum": null,
+      "description": "Inicio de jornada (seg desde medianoche)",
+      "aliases": []
+    },
+    "vehicles.end_time": {
+      "name": "vehicles.end_time",
+      "type": "integer",
+      "required": false,
+      "min": null,
+      "max": null,
+      "pattern": null,
+      "enum": null,
+      "description": "Fin de jornada (seg desde medianoche)",
+      "aliases": []
+    },
+    "vehicles.breaks": {
+      "name": "vehicles.breaks",
+      "type": "array",
+      "required": false,
+      "min": null,
+      "max": null,
+      "pattern": null,
+      "enum": null,
+      "description": "Descansos programados",
+      "aliases": []
+    },
+    "vehicles.fixed_cost": {
+      "name": "vehicles.fixed_cost",
+      "type": "float",
+      "required": false,
+      "min": null,
+      "max": null,
+      "pattern": null,
+      "enum": null,
+      "description": "Costo fijo por usar el vehículo",
+      "aliases": []
+    },
+    "vehicles.cost_per_km": {
+      "name": "vehicles.cost_per_km",
+      "type": "float",
+      "required": false,
+      "min": null,
+      "max": null,
+      "pattern": null,
+      "enum": null,
+      "description": "Costo por kilómetro recorrido",
+      "aliases": []
+    },
+    "vehicles.cost_per_hour": {
+      "name": "vehicles.cost_per_hour",
+      "type": "float",
+      "required": false,
+      "min": null,
+      "max": null,
+      "pattern": null,
+      "enum": null,
+      "description": "Costo por hora de operación del vehículo",
+      "aliases": []
+    },
+    "vehicles.cost_per_stop": {
+      "name": "vehicles.cost_per_stop",
+      "type": "float",
+      "required": false,
+      "min": null,
+      "max": null,
+      "pattern": null,
+      "enum": null,
+      "description": "Costo fijo por cada parada realizada",
+      "aliases": []
+    },
+    "vehicles.max_route_duration": {
+      "name": "vehicles.max_route_duration",
+      "type": "integer",
+      "required": false,
+      "min": null,
+      "max": null,
+      "pattern": null,
+      "enum": null,
+      "description": "Duración máxima de ruta en segundos",
+      "aliases": []
+    },
+    "vehicles.max_distance": {
+      "name": "vehicles.max_distance",
+      "type": "integer",
+      "required": false,
+      "min": null,
+      "max": null,
+      "pattern": null,
+      "enum": null,
+      "description": "Distancia máxima de ruta en metros",
+      "aliases": []
+    },
+    "vehicles.max_tasks": {
+      "name": "vehicles.max_tasks",
+      "type": "integer",
+      "required": false,
+      "min": null,
+      "max": null,
+      "pattern": null,
+      "enum": null,
+      "description": "Número máximo de paradas en la ruta",
+      "aliases": []
+    },
+    "pickups_deliveries": {
+      "name": "pickups_deliveries",
+      "type": "array",
+      "required": false,
+      "min": null,
+      "max": null,
+      "pattern": null,
+      "enum": null,
+      "description": "Pares de recogida y entrega",
+      "aliases": []
+    }
+  },
+  "semantic_rules": [
+    "time_window_end debe ser posterior a time_window_start en todas las ubicaciones",
+    "ventanas horarias fuera de 06:00-22:00 (21600s-79200s) son atípicas para visitas de servicio",
+    "coordenadas deben estar dentro del área de operación geográfica",
+    "un cliente no puede tener dos visitas asignadas el mismo día con el mismo tipo",
+    "weight_demand negativo significa entrega, positivo significa recogida",
+    "volume_demand negativo significa entrega, positivo significa recogida",
+    "start_time del vehículo debe ser <= que el time_window_start más temprano de sus visitas",
+    "end_time del vehículo debe ser >= que el time_window_end más tardío de sus visitas",
+    "si allow_skipping_nodes es false, la demanda total no debe exceder la capacidad total",
+    "cada par pickup-delivery debe tener demandas opuestas (suma cero)",
+    "skills del vehículo deben ser superconjunto de required_skills de la ubicación",
+    "coordenadas duplicadas pueden indicar el mismo cliente ingresado dos veces"
+  ],
+  "inference_mappings": {
+    "lat": [
+      "latitude",
+      "latitud",
+      "y",
+      "coord_y",
+      "coord_y"
+    ],
+    "lng": [
+      "longitude",
+      "longitud",
+      "x",
+      "coord_x",
+      "coord_x"
+    ],
+    "coords": [
+      "coordenadas",
+      "coordinates",
+      "xy",
+      "point"
+    ],
+    "weight_demand": [
+      "peso",
+      "weight",
+      "demanda_peso",
+      "cargo_weight"
+    ],
+    "volume_demand": [
+      "volumen",
+      "volume",
+      "demanda_volumen",
+      "cargo_volume"
+    ],
+    "service_time": [
+      "tiempo_servicio",
+      "service",
+      "duration",
+      "duracion"
+    ],
+    "time_window_start": [
+      "tw_start",
+      "ventana_inicio",
+      "start_time_window",
+      "earliest"
+    ],
+    "time_window_end": [
+      "tw_end",
+      "ventana_fin",
+      "end_time_window",
+      "latest"
+    ],
+    "required_skills": [
+      "skills",
+      "habilidades",
+      "competencias",
+      "certificaciones"
+    ],
+    "weight_capacity": [
+      "capacidad_peso",
+      "max_weight",
+      "payload"
+    ],
+    "volume_capacity": [
+      "capacidad_volumen",
+      "max_volume",
+      "cargo_capacity"
+    ],
+    "start_location_id": [
+      "start_location",
+      "origen",
+      "depot_start"
+    ],
+    "end_location_id": [
+      "end_location",
+      "destino",
+      "depot_end"
+    ]
+  },
+  "custom_validators": [
+    "domain_packs.vrp.vrp_validators:check_coords_in_bounds",
+    "domain_packs.vrp.vrp_validators:check_time_window_overlap",
+    "domain_packs.vrp.vrp_validators:check_pickup_delivery_balance"
+  ],
+  "solver_contract": {
+    "pydantic_module": "vrp_solver.models",
+    "pydantic_class": "OptimizeRequest",
+    "json_schema_path": null
+  },
+  "metadata": {
+    "solver_api_url": "http://localhost:8000/optimize",
+    "area_of_operation": {
+      "lat_min": 4.47,
+      "lat_max": 4.83,
+      "lng_min": -74.25,
+      "lng_max": -74.0
+    },
+    "typical_service_hours": {
+      "start": 21600,
+      "end": 79200
+    }
+  }
+}

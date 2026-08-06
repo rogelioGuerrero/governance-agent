@@ -273,10 +273,14 @@ def compute_interop_confidence(
         result["error"] = f"Field '{field_id}' no encontrado"
         return result
 
-    # 1. Quality score (0.0-1.0)
+    # 1. Quality score (0.0-1.0) — compute locally without mutating the graph
     qs = field_node.get("quality_score", 0.0)
     if qs == 0.0:
-        qs = graph.compute_quality_score(field_id)
+        completeness = field_node.get("completeness", 0.0)
+        consistency = field_node.get("consistency", 0.0)
+        validity = field_node.get("validity", 0.0)
+        uniqueness = field_node.get("uniqueness", 0.0)
+        qs = round(completeness * 0.4 + consistency * 0.3 + validity * 0.2 + uniqueness * 0.1, 3)
     result["quality_score"] = round(qs, 3)
 
     # 2. Review factor
@@ -538,11 +542,15 @@ def verify_graph_invariants(graph: NomencladorGraph) -> dict:
                 })
 
         if edge_type == EdgeType.EQUIVALE_A.value:
-            if source_type != NodeType.CLASSIFIER.value or target_type != NodeType.CLASSIFIER.value:
+            valid_equivalence = (
+                (source_type == NodeType.CLASSIFIER.value and target_type == NodeType.CLASSIFIER.value)
+                or (source_type == NodeType.FIELD.value and target_type == NodeType.FIELD.value)
+            )
+            if not valid_equivalence:
                 violations.append({
                     "edge": f"{source} -> {target}",
                     "type": "invalid_equivalence_direction",
-                    "message": f"EQUIVALE_A debe ser Classifier->Classifier, pero es {source_type}->{target_type}",
+                    "message": f"EQUIVALE_A debe ser Classifier->Classifier o Field->Field, pero es {source_type}->{target_type}",
                 })
 
         if edge_type == EdgeType.TIENE_CONTEXTO.value:
