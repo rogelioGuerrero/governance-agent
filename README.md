@@ -304,6 +304,26 @@ Cada variable del nomenclador tiene un **custodio institucional** (la persona o 
 - **Trazar el respaldo legal** — cada variable está vinculada al artículo específico de la norma que la respalda (ej: Art. 47 de la Ley General de Salud para vacunación obligatoria).
 - **Auditar el cumplimiento normativo** — el gobierno puede listar qué variables tienen respaldo normativo y cuáles no, identificando brechas de gobernanza antes de que se conviertan en problemas legales.
 
+### Construcción del nomenclador
+
+¿Cómo se construye el nomenclador? Los ministerios tienen sus datos en sistemas distintos, con estructuras de datos que nadie ha revisado en años. Governance Agent lee esas estructuras tal como están, identifica qué variable corresponde a cada elemento, y arma el nomenclador automáticamente. El equipo del ministerio solo revisa y aprueba — no tiene que construirlo desde cero.
+
+### Descubrimiento de oportunidades de política pública
+
+A partir de las variables disponibles en el nomenclador, el agente genera insights sobre las fuentes de datos: qué variables tienen mejor calidad, qué variables permiten cruzar información entre fuentes, y qué combinaciones de variables habilitan nuevos indicadores. El agente puede sugerir políticas o programas que la institución podría implementar con los datos que ya tiene — sin necesidad de recolectar información nueva.
+
+### ¿Podemos implementar esta política?
+
+Cuando una institución quiere diseñar o monitorear una política, necesita saber si tiene los datos para hacerlo. El agente lee la descripción de la política, identifica qué variables se necesitan, busca cada una en el nomenclador, y responde: **¿podemos hacerlo con los datos que tenemos hoy, necesitamos ajustes, o todavía no es posible?** El reporte dice qué variables existen y en qué sistemas, cuáles faltan, y qué porcentaje de la política se puede sustentar con datos actuales.
+
+### Trazabilidad y auditoría de variables
+
+Cada variable del nomenclador tiene un historial: quién la creó, quién la modificó, por qué, y cuándo. Si una variable cambia o se retira, el cambio queda registrado. Esto permite a la institución — y a los órganos de control — reconstruir el recorrido de cualquier dato que sustente una decisión de política pública.
+
+### Registros administrativos con fines estadísticos
+
+Un ministerio quiere usar los registros de vacunación para estimar cobertura nacional. Pero "vacunado" en el registro del hospital significa "dosis aplicada", mientras que en el censo significa "esquema completo". Governance Agent detecta que ambas fuentes tienen la variable "estado de vacunación" pero con distinta metodología de captura y distinta población objetivo, y advierte que no son directamente comparables — antes de que el ministerio publique un indicador equivocado.
+
 ---
 
 ## Roadmap
