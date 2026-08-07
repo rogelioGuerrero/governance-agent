@@ -13,14 +13,14 @@
 - [Descripción](#descripción)
 - [El problema](#el-problema)
 - [Cómo funciona](#cómo-funciona)
-- [Arquitectura](#arquitectura)
-- [Instalación](#instalación)
-- [Uso rápido](#uso-rápido)
-- [Módulos de dominio](#módulos-de-dominio)
 - [Casos de uso](#casos-de-uso)
+- [Diferenciación con herramientas existentes](#diferenciación-con-herramientas-existentes)
+- [Nivel de esfuerzo de implementación](#nivel-de-esfuerzo-de-implementación)
+- [Requisitos técnicos](#requisitos-técnicos)
 - [Roadmap](#roadmap)
 - [Contribuir](#contribuir)
 - [Licencia](#licencia)
+- [Contacto](#contacto)
 
 ---
 
@@ -30,11 +30,15 @@ Governance Agent es una herramienta de código abierto que asegura la calidad de
 
 Si hay errores, el agente los corrige automáticamente. Si no puede, pregunta al planificador sin detener el proceso. Y aprende de cada corrección para no repetir errores.
 
+Si la institución aún no cuenta con un clasificador de variables o nomenclador formal, Governance Agent puede apoyar su construcción: la herramienta es capaz de inferir automáticamente la estructura de los datos a partir de los modelos existentes en los sistemas transaccionales, y generar una configuración inicial que el equipo técnico puede luego refinar. Adicionalmente, el agente puede incorporar documentación normativa y técnica del dominio como respaldo para la validación semántica, sin requerir configuración manual compleja.
+
 **¿Por qué?** Porque las decisiones de política pública —desde el diseño de un subsidio hasta el monitoreo de un programa— dependen de datos confiables. Si los datos tienen errores que nadie detectó, la decisión también estará equivocada.
 
 **¿Para qué?** Entre otros usos: monitorear programas en ejecución, responder preguntas sobre los datos con confianza, detectar hallazgos que ningún sistema tradicional identifica, o gestionar de forma propositiva con datos integrados mediante el nomenclador.
 
 **El resultado: gestión pública apoyada en datos confiables, sin importar la fuente.**
+
+Para detalles de instalación, API, módulos y arquitectura, ver [docs/USO_TECNICO.md](docs/USO_TECNICO.md).
 
 ---
 
@@ -42,66 +46,25 @@ Si hay errores, el agente los corrige automáticamente. Si no puede, pregunta al
 
 La formulación de políticas públicas en América Latina y el Caribe se basa en datos extraídos de sistemas transaccionales que presentan problemas endémicos de calidad:
 
-- **Inconsistencias lógicas no detectables por validación tradicional**: un formulario registra "edad: 25" y "fecha de nacimiento: 2010". Ambos campos son válidos individualmente, pero imposibles en conjunto. La validación estructural no lo detecta.
-- **Nomencladores desactualizados o inconsistentes entre sistemas**: el Ministerio de Salud usa "cod_dx" para diagnóstico, el hospital usa "diagnostico", y el censo usa "CIE10". Ningún sistema los reconcilia.
-- **Datos geográficamente inválidos**: coordenadas fuera del área de operación, depósitos a 500km de las rutas de entrega, puntos duplicados.
-- **Errores de captura masivos**: el 30% de los registros de un consolidado pueden tener campos erróneos que pasan validación estructural pero son lógicamente imposibles.
+1. **Inconsistencias lógicas no detectables por validación tradicional**: un formulario registra "edad: 25" y "fecha de nacimiento: 2010". Ambos campos son válidos individualmente, pero imposibles en conjunto. La validación estructural no lo detecta.
 
-Las herramientas existentes en el catálogo de Código para el Desarrollo abordan parte del problema: **Data Cleaner** aplica reglas sintácticas a CSV, **OpenRefine** permite limpieza manual, y **Atypical Data Classifier** detecta anomalías en encuestas. Sin embargo, ninguna combina validación semántica con IA, corrección automática, y generalidad para cualquier dominio de política pública.
+2. **Nomencladores inconsistentes entre sistemas**: el Ministerio de Salud usa "cod_dx" para diagnóstico, el hospital usa "diagnostico", y el censo usa "CIE10". Ningún sistema reconcilia estas diferencias, lo que impide consolidar información para planificación.
+
+3. **Datos geográficamente inválidos**: coordenadas fuera del área de operación, depósitos a 500km de las rutas de entrega, puntos duplicados.
+
+4. **Errores de captura masivos**: el 30% de los registros de un consolidado pueden tener campos erróneos que pasan validación estructural pero son lógicamente imposibles. Estos errores propagan decisiones equivocadas a la política pública.
 
 ---
 
 ## Cómo funciona
 
-```mermaid
-flowchart LR
-    subgraph Sistemas["Sistemas del ministerio"]
-        S1["CRM"]
-        S2["Formularios"]
-        S3["Censo / RIPS"]
-    end
+Governance Agent aplica tres capas de validación secuencial sobre el consolidado de datos:
 
-    subgraph GA["Governance Agent"]
-        direction TB
-        C1["Capa 1: Estructural\n¿Faltan campos? ¿Tipos correctos?"]
-        C2["Capa 2: Semántica con IA\n¿Edad y fecha de nacimiento coinciden?"]
-        C3["Capa 3: Reglas del dominio\n¿Monto dentro del máximo legal?"]
-        AC["Auto-corrección con IA"]
-        MEM["Memoria: aprende\nde cada corrección"]
+**Capa 1 — Estructural**: Verifica tipos de datos, campos obligatorios, enumeraciones y rangos mínimo/máximo. Esta capa usa la configuración definida por el ministerio.
 
-        C1 --> C2 --> C3
-        C3 --> AC
-        AC -->|re-intenta| C1
-        C3 --> MEM
-    end
+**Capa 2 — Reglas de dominio**: Ejecuta validadores específicos del dominio. Por ejemplo: verificar que el monto de un subsidio no exceda el máximo legal permitido, que los códigos existan en el nomenclador, o que un beneficiario no esté duplicado entre programas.
 
-    subgraph Entrega["Entregable"]
-        R["Reporte de Calidad\ndel Consolidado"]
-        D["Datos validados\ny corregidos"]
-    end
-
-    subgraph Decision["Toma de decisiones"]
-        P["Planificador decide\nsobre datos confiables"]
-    end
-
-    Sistemas -->|"consolidado de datos"| GA
-    GA -->|"score + issues"| R
-    GA -->|"datos limpios"| D
-    R --> P
-    D --> P
-```
-
-**El entregable**: un reporte de calidad del consolidado que muestra qué datos estaban mal, qué se corrigió automáticamente, y qué requiere revisión humana — antes de que el planificador use esos datos para tomar decisiones.
-
-![Reporte de Calidad](docs/reporte_calidad.png)
-
-### Tres capas de validación
-
-| Capa | Qué valida | Ejemplo |
-|------|-----------|---------|
-| **Estructural** | Tipos, campos obligatorios, valores permitidos | "El campo `fecha_nacimiento` está vacío" |
-| **Semántica con IA** | Inconsistencias lógicas, valores implausibles | "Edad 25 con fecha de nacimiento 2010 es contradictorio" |
-| **Reglas de dominio** | Coherencia con el nomenclador y restricciones del ministerio | "El monto del subsidio excede el máximo legal permitido" |
+**Capa 3 — Semántica con IA**: Utiliza inteligencia artificial para razonar sobre los datos y detectar inconsistencias lógicas que las capas anteriores no pueden predecir. Por ejemplo: un registro con edad 25 y fecha de nacimiento 2010 es contradictorio, o un beneficiario con ingresos superiores al umbral del programa. El agente puede incorporar documentación normativa del dominio como respaldo para enriquecer el razonamiento semántico.
 
 ### Auto-corrección
 
@@ -109,148 +72,15 @@ Cuando se detectan errores críticos, el agente usa IA para corregir automática
 
 ### Human-in-the-loop
 
-Los warnings (no críticos) se acumulan como preguntas batch para el planificador. No detienen el proceso. El planificador responde al final, y el agente aprende de sus respuestas.
+Los warnings (no críticos) se acumulan como preguntas en lote para el planificador. No detienen el proceso. El planificador responde al final, y el agente aprende de sus respuestas.
 
 ### Memoria acumulativa
 
 Cada corrección aceptada o rechazada se almacena en la memoria del agente. Tras 5 aceptaciones de la misma corrección, se auto-promueve a regla automática. El agente aprende del dominio.
 
----
+**El entregable**: un reporte de calidad del consolidado que muestra qué datos estaban mal, qué se corrigió automáticamente, y qué requiere revisión humana — antes de que el planificador use esos datos para tomar decisiones.
 
-## Arquitectura
-
-```
-governance-agent/
-├── src/
-│   ├── core/                          # Núcleo (independiente del dominio)
-│   │   ├── domain_pack.py             # Configuración de módulos + loader
-│   │   ├── validator.py               # Motor de validación multi-capa
-│   │   ├── llm_adapter.py             # Adaptador de IA multi-proveedor
-│   │   ├── orchestrator.py            # Orquestador: validar → corregir
-│   │   ├── pack_memory.py             # Memoria de correcciones con auto-promoción
-│   │   ├── human_loop.py              # Human-in-the-loop batch
-│   │   ├── profiler.py                # Análisis de datos
-│   │   ├── inference.py               # Inferencia de equivalencias entre variables
-│   │   ├── standards.py               # Registro dinámico de clasificadores
-│   │   └── mcp_server_abstract.py     # Servidor de integración
-│   ├── domain_packs/                  # Módulos de dominio (intercambiables)
-│   │   ├── vrp/                       # Planificación de despliegue territorial
-│   │   │   ├── pack.yaml              # Configuración + reglas + mapeos
-│   │   │   └── vrp_validators.py      # Validadores específicos
-│   │   └── salud/                     # Nomenclador de salud
-│   │       └── pack.yaml              # Configuración + reglas
-│   ├── llm_client.py                  # Cliente de IA multi-proveedor
-│   └── mcp_server.py                  # Servidor de integración
-├── scripts/                           # Scripts de prueba y demostración
-│   ├── quickstart.py                  # Demostración rápida
-│   ├── test_real_data.py              # Pruebas con datos reales
-│   ├── test_llm_semantic.py           # Pruebas de validación semántica
-│   ├── test_orchestrator.py           # Pruebas del orquestador completo
-│   └── generate_vrp_pack.py           # Generación automática de configuración
-├── pyproject.toml
-├── LICENSE
-└── README.md
-```
-
-**Principio clave**: el núcleo (`core/`) no conoce ningún dominio. Todo el conocimiento de dominio vive en los módulos (`domain_packs/`). Un nuevo ministerio = un nuevo módulo. El código no se modifica.
-
----
-
-## Instalación
-
-### Requisitos
-
-- Python 3.11+
-- [uv](https://docs.astral.sh/uv/) (gestor de paquetes)
-- Clave de acceso de al menos un proveedor de IA:
-  - Cualquier proveedor compatible con la API de OpenAI (varios ofrecen nivel gratuito)
-
-### Pasos
-
-```bash
-# 1. Clonar el repositorio
-git clone https://github.com/rogelioGuerrero/governance-agent.git
-cd governance-agent
-
-# 2. Instalar dependencias
-uv sync
-
-# 3. Configurar claves de acceso
-cp .env.example .env
-# Editar .env con tu clave de cualquier proveedor compatible con OpenAI
-#   Ej: GROQ_API_KEY=gsk_...  |  GEMINI_API_KEY=...  |  SAMBANOVA_API_KEY=...
-
-# 4. Verificar instalación
-uv run python scripts/quickstart.py
-```
-
----
-
-## Uso rápido
-
-```python
-from src.core.domain_pack import PackLoader
-from src.core.validator import ValidationEngine
-from src.core.llm_adapter import LLMAdapter
-from src.core.pack_memory import PackMemory
-from src.core.human_loop import HumanInTheLoop
-
-# 1. Cargar la configuración del ministerio
-pack = PackLoader.from_yaml("src/domain_packs/salud/pack.yaml")
-
-# 2. Configurar el motor de validación
-llm = LLMAdapter(json_mode=True, temperature=0.1)
-memory = PackMemory("salud")
-hitl = HumanInTheLoop(pack_memory=memory)
-engine = ValidationEngine(pack=pack, pack_memory=memory, hitl=hitl, llm_client=llm)
-
-# 3. Validar el consolidado de datos
-resultado = engine.validate(consolidado_de_datos)
-
-# 4. Revisar resultados
-print(f"Válido: {resultado.is_valid}")
-print(f"Problemas: {len(resultado.issues)}")
-for issue in resultado.issues:
-    print(f"  [{issue.severity}] {issue.field_name}: {issue.message}")
-    if issue.suggested_value:
-        print(f"    Sugerencia: {issue.suggested_value}")
-
-# 5. Preguntas para el planificador (no bloqueantes)
-for q in hitl.get_pending_questions():
-    print(f"  [{q.level}] {q.field_name}: {q.message}")
-```
-
----
-
-## Módulos de dominio
-
-Un módulo de dominio encapsula todo el conocimiento de un área de política pública:
-
-| Componente | Descripción | Ejemplo |
-|-----------|-------------|--------|
-| **Variables esperadas** | Estructuras de datos, tipos, obligatoriedad | `locations.id` (texto, requerido), `locations.coords` (coordenadas, requerido) |
-| **Reglas semánticas** | Reglas lógicas en lenguaje natural para la IA | "end_time del vehículo ≥ time_window_end más tardío" |
-| **Sinónimos de variables** | Equivalencias entre sistemas para interoperabilidad | `lat` ↔ `latitude` ↔ `latitud` ↔ `y` |
-| **Validadores específicos** | Validadores en Python | Coordenadas en área de operación, balance recogida-entrega |
-| **Clasificadores** | Nomencladores del dominio | CIE-10, CUOC, cultivos permitidos |
-| **Configuración** | Parámetros del dominio | Área geográfica, horas típicas de servicio |
-
-### Packs disponibles
-
-| Módulo | Dominio | Estado |
-|--------|---------|--------|
-| `vrp` | Planificación de despliegue territorial | Funcional con datos reales |
-| `salud` | Nomenclador de salud | Funcional |
-
-### Crear un nuevo módulo
-
-```bash
-# Auto-generar desde un modelo existente
-uv run python scripts/generate_vrp_pack.py
-
-# O crear manualmente un pack.yaml
-# Ver src/domain_packs/salud/pack.yaml como ejemplo
-```
+![Reporte de Calidad](docs/reporte_calidad.png)
 
 ---
 
@@ -258,35 +88,19 @@ uv run python scripts/generate_vrp_pack.py
 
 ### Ministerio de Agricultura
 
-Un ministerio de agricultura necesita apoyar una política de subsidios a pequeños productores. Consolida los datos anuales de su registro de productores. Governance Agent valida:
-
-- **Estructural**: todos los registros tienen ID, cultivo, hectáreas, rendimiento
-- **Dominio**: el cultivo existe en el nomenclador, las coordenadas están en área agrícola
-- **Semántica (IA)**: "rendimiento de 50 ton/ha en papa es implausible (rango normal: 15-25). ¿Corregir a 18?"
+Un ministerio de agricultura necesita apoyar una política de subsidios a pequeños productores. Consolida los datos anuales de su registro de productores. Governance Agent valida que todos los registros tengan los campos obligatorios, que los cultivos existan en el nomenclador, que las coordenadas estén en área agrícola, y que los rendimientos sean plausibles. Si un registro reporta 50 toneladas por hectárea en papa, el agente sugiere corregir a 18 (rango normal: 15-25).
 
 ### Ministerio de Salud
 
-Un ministerio de salud consolida datos de RIPS, SISS y el censo para evaluar cobertura. Governance Agent valida:
-
-- **Estructural**: todos los registros tienen código de diagnóstico, edad, municipio
-- **Dominio**: el código CIE-10 existe en el nomenclador, el municipio es válido
-- **Semántica (IA)**: "edad 25 con fecha de nacimiento 2010 es contradictorio. ¿Corregir fecha a 1999?"
+Un ministerio de salud consolida datos de RIPS, SISS y el censo para evaluar cobertura. Governance Agent valida que los códigos CIE-10 existan en el nomenclador, que los municipios sean válidos, y que no haya contradicciones lógicas entre campos como edad y fecha de nacimiento. Si encuentra "edad: 25" con "fecha de nacimiento: 2010", sugiere corregir la fecha a 1999.
 
 ### Programa de Beneficencia Social
 
-Un programa de transferencias condicionadas verifica la elegibilidad de beneficiarios antes de emitir pagos. Governance Agent valida:
-
-- **Estructural**: todos los registros tienen ID, ingresos, composición familiar, actividad económica
-- **Dominio**: no hay duplicados entre programas, los ingresos están dentro del umbral
-- **Semántica (IA)**: "ingresos de $5,000 con actividad 'desempleado' es inconsistente. ¿Revisar actividad económica?"
+Un programa de transferencias condicionadas necesita verificar la elegibilidad de beneficiarios antes de emitir pagos. Governance Agent valida que los ingresos declarados sean consistentes con la actividad económica registrada, que no haya beneficiarios duplicados entre programas, y que las composiciones familiares sean coherentes (ej: no registrar hijos mayores de edad como dependientes sin justificación). Si un beneficiario reporta ingresos superiores al umbral del programa, el agente marca el registro para revisión.
 
 ### Alcaldía Municipal
 
-Una alcaldía consolida datos de catastro, registro civil y servicios públicos para planificar inversiones locales. Governance Agent valida:
-
-- **Estructural**: todos los registros tienen dirección, predio, contribuyente
-- **Dominio**: el predio existe en el catastro, la dirección corresponde al municipio
-- **Semántica (IA)**: "un predio de 5 m² declarado como residencia familiar es implausible. ¿Revisar superficie?"
+Una alcaldía consolida datos de catastro, registro civil y servicios públicos para planificar inversiones locales. Governance Agent valida que los predios existan en el catastro, que las direcciones correspondan al municipio, y que los datos sean coherentes. Si un predio de 5 m² está declarado como residencia familiar, el agente marca el registro como implausible para revisión.
 
 ### Consulta de viabilidad de política pública
 
@@ -330,20 +144,58 @@ Una organización de la sociedad civil descarga los datos abiertos publicados po
 
 ---
 
+## Diferenciación con herramientas existentes
+
+| Herramienta | Qué hace | Qué le falta |
+|-------------|----------|-------------|
+| Data Cleaner (BID) | Aplica reglas sintácticas a archivos CSV | No valida semántica con IA. No corrige automáticamente. No se adapta a cualquier dominio |
+| OpenRefine | Permite limpieza manual de datos desde el navegador | No usa IA. No tiene reglas de dominio. No aprende de correcciones |
+| Atypical Data Classifier (BID) | Detecta anomalías en encuestas de hogares | Solo detecta, no corrige. No construye nomenclador. No valida coherencia con clasificadores del dominio |
+
+**Esta es la única herramienta que combina: validación semántica con IA + corrección automática + adaptabilidad a cualquier dominio de política pública mediante módulos intercambiables.**
+
+---
+
+## Nivel de esfuerzo de implementación
+
+**Alto** — Governance Agent es una herramienta que requiere equipo técnico para implementar. Cada ministerio necesita:
+
+1. **Crear su módulo de dominio**: definir el nomenclador, las reglas semánticas y los validadores específicos de su dominio.
+2. **Integrar con sus sistemas**: configurar la extracción de consolidados desde sus sistemas transaccionales.
+3. **Configurar las claves de acceso de IA**: obtener acceso a al menos un proveedor de IA compatible con la API de OpenAI (varios ofrecen nivel gratuito).
+4. **Capacitar al equipo**: en el mantenimiento y evolución de los módulos.
+
+La herramienta está diseñada para ser flexible: cada gobierno tiene sistemas distintos, nomencladores distintos, y reglas de dominio distintas. Por ello, el núcleo es independiente del dominio y la configuración específica de cada ministerio se realiza mediante módulos intercambiables, que pueden crearse manualmente o generarse automáticamente desde los modelos de datos existentes en los sistemas de la institución.
+
+---
+
+## Requisitos técnicos
+
+- **Python 3.11+**
+- **Gestor de paquetes**: uv
+- **Proveedor de IA**: Cualquier proveedor compatible con la API de OpenAI (varios ofrecen nivel gratuito)
+- **Sin dependencias pesadas**: no requiere pandas, numpy ni bases de datos externas para funcionamiento básico
+- **Despliegue**: local, on-premise o cloud
+
+---
+
 ## Roadmap
 
-- [x] Núcleo abstracto con validación multi-capa
-- [x] Integración con IA agnóstica (cualquier proveedor compatible con OpenAI)
-- [x] Auto-corrección de errores con IA
-- [x] Memoria acumulativa con auto-promoción de reglas
-- [x] Human-in-the-loop batch no intrusivo
-- [x] Orquestador completo: validar → corregir
-- [x] Auto-generación de módulos desde modelos existentes
-- [x] Servidor de integración para asistentes IA
-- [ ] Conectores para sistemas gubernamentales (API, DB, CSV, SFTP)
-- [ ] Nomenclador canónico como puente entre sistemas
-- [ ] UI web para planificadores no técnicos
-- [ ] Dashboard de calidad de datos por dominio
+**Completado:**
+- Núcleo con validación multi-capa
+- Integración con IA agnóstica (cualquier proveedor compatible con OpenAI) para validación semántica
+- Auto-corrección de errores con IA
+- Memoria acumulativa con auto-promoción de reglas
+- Human-in-the-loop batch no intrusivo
+- Orquestador completo: validar → corregir
+- Auto-generación de módulos desde modelos existentes
+- Servidor de integración para asistentes IA
+
+**Futuras versiones:**
+- Conectores para sistemas gubernamentales (API, DB, CSV, SFTP)
+- Nomenclador canónico como puente entre sistemas
+- UI web para planificadores no técnicos
+- Dashboard de calidad de datos por dominio
 
 *Estas funcionalidades están en desarrollo y se incorporarán en futuras versiones.*
 
@@ -368,9 +220,6 @@ Las contribuciones son bienvenidas. Ver [CONTRIBUTING.md](CONTRIBUTING.md) para 
 
 Governance Agent es desarrollado y mantenido por AGTI SA de CV como contribución al ecosistema de código abierto para la gestión pública en América Latina y el Caribe.
 
-- **Repositorio**: [https://github.com/rogelioGuerrero/governance-agent](https://github.com/rogelioGuerrero/governance-agent)
-- **Contacto**: [info@agtisa.com](mailto:info@agtisa.com)
-
 ---
 
 ## Licencia
@@ -388,4 +237,19 @@ Para colaboración, adaptación o reportar problemas:
 
 ---
 
-*Governance Agent es un Bien Público Digital candidato al catálogo de Código para el Desarrollo del BID.*
+## Datos de la herramienta
+
+| Campo | Valor |
+|-------|-------|
+| **Nombre** | Governance Agent |
+| **Tipo de herramienta** | API, Algoritmo |
+| **Licencia** | Apache License 2.0 |
+| **Lenguaje** | Python |
+| **Versión** | 1.0.0 |
+| **Categorías** | Inteligencia artificial, Interoperabilidad de datos, Gestión de bases de datos |
+| **País de origen** | El Salvador |
+| **Estado** | Activo |
+
+---
+
+*Governance Agent aspira a ser reconocido como Bien Público Digital por su contribución a la mejora de la calidad de los datos gubernamentales en América Latina y el Caribe. La herramienta es de código abierto bajo licencia Apache 2.0, permite uso comercial, y está diseñada para ser reutilizable por cualquier gobierno de la región sin dependencias de proveedores específicos.*
