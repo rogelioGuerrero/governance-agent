@@ -16,7 +16,7 @@
 - [Arquitectura](#arquitectura)
 - [Instalación](#instalación)
 - [Uso rápido](#uso-rápido)
-- [Domain Packs](#domain-packs)
+- [Módulos de dominio](#módulos-de-dominio)
 - [Casos de uso](#casos-de-uso)
 - [Roadmap](#roadmap)
 - [Contribuir](#contribuir)
@@ -26,7 +26,7 @@
 
 ## Descripción
 
-Governance Agent es un framework de código abierto que asegura la calidad de los datos como insumo para la gestión pública. Cada ministerio o institución encapsula su nomenclador, reglas y validadores en un *Domain Pack* intercambiable. Cuando la institución consolida datos de sus sistemas para planificar o evaluar, Governance Agent valida que sean estructuralmente correctos, semánticamente consistentes mediante IA, y coherentes con el clasificador de variables del dominio.
+Governance Agent es una herramienta de código abierto que asegura la calidad de los datos como insumo para la gestión pública. Cada ministerio o institución configura su nomenclador, reglas y validadores en un módulo intercambiable. Cuando la institución consolida datos de sus sistemas para planificar o evaluar, Governance Agent valida que sean estructuralmente correctos, semánticamente consistentes mediante IA, y coherentes con el clasificador de variables del dominio.
 
 Si hay errores, el agente los corrige automáticamente. Si no puede, pregunta al planificador sin detener el proceso. Y aprende de cada corrección para no repetir errores.
 
@@ -105,7 +105,7 @@ flowchart LR
 
 ### Auto-corrección
 
-Cuando se detectan errores críticos, el agente usa IA para corregir automáticamente los datos y re-intenta la validación (hasta 3 iteraciones). Si no puede corregir, bloquea y reporta.
+Cuando se detectan errores críticos, el agente usa IA para corregir automáticamente los datos y re-intenta la validación. Si no puede corregir, bloquea y reporta.
 
 ### Human-in-the-loop
 
@@ -113,7 +113,7 @@ Los warnings (no críticos) se acumulan como preguntas batch para el planificado
 
 ### Memoria acumulativa
 
-Cada corrección aceptada o rechazada se almacena en PackMemory. Tras 5 aceptaciones de la misma corrección, se auto-promueve a regla automática. El agente aprende del dominio.
+Cada corrección aceptada o rechazada se almacena en la memoria del agente. Tras 5 aceptaciones de la misma corrección, se auto-promueve a regla automática. El agente aprende del dominio.
 
 ---
 
@@ -122,37 +122,37 @@ Cada corrección aceptada o rechazada se almacena en PackMemory. Tras 5 aceptaci
 ```
 governance-agent/
 ├── src/
-│   ├── core/                          # Núcleo abstracto (domain-agnostic)
-│   │   ├── domain_pack.py             # Schema de pack + loader + auto-generación
+│   ├── core/                          # Núcleo (independiente del dominio)
+│   │   ├── domain_pack.py             # Configuración de módulos + loader
 │   │   ├── validator.py               # Motor de validación multi-capa
-│   │   ├── llm_adapter.py             # Adapter LLM (multi-provider con failover)
-│   │   ├── orchestrator.py            # Orquestador: validar → corregir → solver
+│   │   ├── llm_adapter.py             # Adaptador de IA multi-proveedor
+│   │   ├── orchestrator.py            # Orquestador: validar → corregir
 │   │   ├── pack_memory.py             # Memoria de correcciones con auto-promoción
 │   │   ├── human_loop.py              # Human-in-the-loop batch
-│   │   ├── profiler.py                # Profiler de datos
-│   │   ├── inference.py               # Inferencia de mapeos de campos
-│   │   ├── standards.py               # Registro dinámico de estándares
-│   │   └── mcp_server_abstract.py     # MCP server abstracto
-│   ├── domain_packs/                  # Packs de dominio (intercambiables)
-│   │   ├── vrp/                       # Logística de entrega
-│   │   │   ├── pack.yaml              # Schema + reglas + mapeos
-│   │   │   └── vrp_validators.py      # Validadores custom
+│   │   ├── profiler.py                # Análisis de datos
+│   │   ├── inference.py               # Inferencia de equivalencias entre variables
+│   │   ├── standards.py               # Registro dinámico de clasificadores
+│   │   └── mcp_server_abstract.py     # Servidor de integración
+│   ├── domain_packs/                  # Módulos de dominio (intercambiables)
+│   │   ├── vrp/                       # Planificación de despliegue territorial
+│   │   │   ├── pack.yaml              # Configuración + reglas + mapeos
+│   │   │   └── vrp_validators.py      # Validadores específicos
 │   │   └── salud/                     # Nomenclador de salud
-│   │       └── pack.yaml
-│   ├── llm_client.py                  # Cliente LLM multi-provider con failover
-│   └── mcp_server.py                  # MCP server (compatibilidad)
+│   │       └── pack.yaml              # Configuración + reglas
+│   ├── llm_client.py                  # Cliente de IA multi-proveedor
+│   └── mcp_server.py                  # Servidor de integración
 ├── scripts/                           # Scripts de prueba y demostración
-│   ├── quickstart.py                  # Demo out-of-the-box
-│   ├── test_real_data.py              # Tests con datos reales
-│   ├── test_llm_semantic.py           # Tests de capa semántica con LLM
-│   ├── test_orchestrator.py           # Tests del orquestador completo
-│   └── generate_vrp_pack.py           # Auto-generación de pack desde Pydantic
+│   ├── quickstart.py                  # Demostración rápida
+│   ├── test_real_data.py              # Pruebas con datos reales
+│   ├── test_llm_semantic.py           # Pruebas de validación semántica
+│   ├── test_orchestrator.py           # Pruebas del orquestador completo
+│   └── generate_vrp_pack.py           # Generación automática de configuración
 ├── pyproject.toml
 ├── LICENSE
 └── README.md
 ```
 
-**Principio clave**: el núcleo (`core/`) no conoce ningún dominio. Todo el conocimiento de dominio vive en los packs (`domain_packs/`). Un nuevo ministerio = un nuevo pack. El código no se modifica.
+**Principio clave**: el núcleo (`core/`) no conoce ningún dominio. Todo el conocimiento de dominio vive en los módulos (`domain_packs/`). Un nuevo ministerio = un nuevo módulo. El código no se modifica.
 
 ---
 
@@ -162,8 +162,8 @@ governance-agent/
 
 - Python 3.11+
 - [uv](https://docs.astral.sh/uv/) (gestor de paquetes)
-- API key de al menos un proveedor LLM:
-  - Cualquier proveedor compatible con la API de OpenAI (varios ofrecen free tier)
+- Clave de acceso de al menos un proveedor de IA:
+  - Cualquier proveedor compatible con la API de OpenAI (varios ofrecen nivel gratuito)
 
 ### Pasos
 
@@ -175,9 +175,9 @@ cd governance-agent
 # 2. Instalar dependencias
 uv sync
 
-# 3. Configurar API keys
+# 3. Configurar claves de acceso
 cp .env.example .env
-# Editar .env con tu API key de cualquier proveedor compatible con OpenAI
+# Editar .env con tu clave de cualquier proveedor compatible con OpenAI
 #   Ej: GROQ_API_KEY=gsk_...  |  GEMINI_API_KEY=...  |  SAMBANOVA_API_KEY=...
 
 # 4. Verificar instalación
@@ -195,7 +195,7 @@ from src.core.llm_adapter import LLMAdapter
 from src.core.pack_memory import PackMemory
 from src.core.human_loop import HumanInTheLoop
 
-# 1. Cargar el domain pack del ministerio
+# 1. Cargar la configuración del ministerio
 pack = PackLoader.from_yaml("src/domain_packs/salud/pack.yaml")
 
 # 2. Configurar el motor de validación
@@ -209,7 +209,7 @@ resultado = engine.validate(consolidado_de_datos)
 
 # 4. Revisar resultados
 print(f"Válido: {resultado.is_valid}")
-print(f"Issues: {len(resultado.issues)}")
+print(f"Problemas: {len(resultado.issues)}")
 for issue in resultado.issues:
     print(f"  [{issue.severity}] {issue.field_name}: {issue.message}")
     if issue.suggested_value:
@@ -222,30 +222,30 @@ for q in hitl.get_pending_questions():
 
 ---
 
-## Domain Packs
+## Módulos de dominio
 
-Un Domain Pack encapsula todo el conocimiento de un dominio de política pública:
+Un módulo de dominio encapsula todo el conocimiento de un área de política pública:
 
 | Componente | Descripción | Ejemplo |
-|-----------|-------------|---------|
-| **Schema fields** | Campos esperados, tipos, obligatoriedad | `locations.id` (string, requerido), `locations.coords` (array[float], requerido) |
-| **Semantic rules** | Reglas lógicas en lenguaje natural para la IA | "end_time del vehículo ≥ time_window_end más tardío" |
-| **Inference mappings** | Sinónimos de campos para interoperabilidad | `lat` ↔ `latitude` ↔ `latitud` ↔ `y` |
-| **Custom validators** | Validadores específicos en Python | Coordenadas en área de operación, balance pickup-delivery |
-| **Standards** | Nomencladores y clasificadores del dominio | CIE-10, CUOC, cultivos permitidos |
-| **Metadata** | Configuración del dominio | Área geográfica, horas típicas de servicio |
+|-----------|-------------|--------|
+| **Variables esperadas** | Estructuras de datos, tipos, obligatoriedad | `locations.id` (texto, requerido), `locations.coords` (coordenadas, requerido) |
+| **Reglas semánticas** | Reglas lógicas en lenguaje natural para la IA | "end_time del vehículo ≥ time_window_end más tardío" |
+| **Sinónimos de variables** | Equivalencias entre sistemas para interoperabilidad | `lat` ↔ `latitude` ↔ `latitud` ↔ `y` |
+| **Validadores específicos** | Validadores en Python | Coordenadas en área de operación, balance recogida-entrega |
+| **Clasificadores** | Nomencladores del dominio | CIE-10, CUOC, cultivos permitidos |
+| **Configuración** | Parámetros del dominio | Área geográfica, horas típicas de servicio |
 
 ### Packs disponibles
 
-| Pack | Dominio | Estado |
-|------|---------|--------|
-| `vrp` | Logística de optimización de rutas | Funcional con datos reales |
+| Módulo | Dominio | Estado |
+|--------|---------|--------|
+| `vrp` | Planificación de despliegue territorial | Funcional con datos reales |
 | `salud` | Nomenclador de salud | Funcional |
 
-### Crear un nuevo pack
+### Crear un nuevo módulo
 
 ```bash
-# Auto-generar desde un modelo Pydantic existente
+# Auto-generar desde un modelo existente
 uv run python scripts/generate_vrp_pack.py
 
 # O crear manualmente un pack.yaml
@@ -333,13 +333,13 @@ Una organización de la sociedad civil descarga los datos abiertos publicados po
 ## Roadmap
 
 - [x] Núcleo abstracto con validación multi-capa
-- [x] Integración LLM agnóstica (cualquier proveedor compatible con OpenAI)
+- [x] Integración con IA agnóstica (cualquier proveedor compatible con OpenAI)
 - [x] Auto-corrección de errores con IA
-- [x] PackMemory con auto-promoción de reglas
+- [x] Memoria acumulativa con auto-promoción de reglas
 - [x] Human-in-the-loop batch no intrusivo
-- [x] Orquestador completo: validar → corregir → solver
-- [x] Auto-generación de packs desde modelos Pydantic
-- [x] MCP server abstracto para integración con asistentes IA
+- [x] Orquestador completo: validar → corregir
+- [x] Auto-generación de módulos desde modelos existentes
+- [x] Servidor de integración para asistentes IA
 - [ ] Conectores para sistemas gubernamentales (API, DB, CSV, SFTP)
 - [ ] Nomenclador canónico como puente entre sistemas
 - [ ] UI web para planificadores no técnicos
@@ -355,7 +355,7 @@ Las contribuciones son bienvenidas. Ver [CONTRIBUTING.md](CONTRIBUTING.md) para 
 
 Áreas donde se busca ayuda:
 
-- **Domain packs nuevos**: agricultura, educación, vivienda, beneficencia social
+- **Módulos nuevos**: agricultura, educación, vivienda, beneficencia social
 - **Conectores**: adaptadores para sistemas gubernamentales específicos
 - **Validadores semánticos**: reglas de dominio para nuevos ministerios
 - **Documentación**: traducciones, guías de implementación, casos de estudio

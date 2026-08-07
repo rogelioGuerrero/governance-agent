@@ -5,7 +5,7 @@
 | Campo | Valor |
 |-------|-------|
 | **Nombre** | Governance Agent |
-| **Tipo de herramienta** | API, Algoritmo, Plugin |
+| **Tipo de herramienta** | API, Algoritmo |
 | **Licencia** | Apache License 2.0 |
 | **Lenguaje** | Python |
 | **Versión** | 1.0.0 |
@@ -17,9 +17,9 @@
 
 ## Descripción general
 
-Governance Agent es un framework de código abierto que asegura la calidad de los datos como insumo para la gestión pública. Cada ministerio o institución encapsula su nomenclador, reglas de validación y clasificadores de variables en un *Domain Pack* intercambiable. Cuando la institución consolida datos de sus sistemas transaccionales para planificar o evaluar, Governance Agent valida que los datos sean estructuralmente correctos, semánticamente consistentes mediante inteligencia artificial, y coherentes con el clasificador de variables del dominio.
+Governance Agent es una herramienta de código abierto que asegura la calidad de los datos como insumo para la gestión pública. Cada ministerio o institución configura su nomenclador, reglas de validación y clasificadores de variables en un módulo intercambiable. Cuando la institución consolida datos de sus sistemas transaccionales para planificar o evaluar, Governance Agent valida que los datos sean estructuralmente correctos, semánticamente consistentes mediante inteligencia artificial, y coherentes con el clasificador de variables del dominio.
 
-Si la institución aún no cuenta con un clasificador de variables o nomenclador formal, Governance Agent puede apoyar su construcción: el framework es capaz de inferir automáticamente la estructura de los datos a partir de los modelos existentes en los sistemas transaccionales, y generar un Domain Pack inicial que el equipo técnico puede luego refinar. Adicionalmente, el agente puede incorporar documentación normativa y técnica del dominio como respaldo para la validación semántica, sin requerir configuración manual compleja.
+Si la institución aún no cuenta con un clasificador de variables o nomenclador formal, Governance Agent puede apoyar su construcción: la herramienta es capaz de inferir automáticamente la estructura de los datos a partir de los modelos existentes en los sistemas transaccionales, y generar una configuración inicial que el equipo técnico puede luego refinar. Adicionalmente, el agente puede incorporar documentación normativa y técnica del dominio como respaldo para la validación semántica, sin requerir configuración manual compleja.
 
 Si detecta errores, el agente los corrige automáticamente usando IA. Si no puede corregirlos, formula preguntas al planificador en lote, sin detener el proceso. Y aprende de cada corrección aceptada o rechazada para no repetir los mismos errores en el futuro.
 
@@ -41,7 +41,7 @@ La formulación de políticas públicas en América Latina y el Caribe se basa e
 
 4. **Errores de captura masivos**: En consolidados de datos gubernamentales, hasta el 30% de los registros pueden contener campos erróneos que pasan validación estructural pero son lógicamente imposibles. Estos errores propagan decisiones equivocadas a la política pública.
 
-Las herramientas existentes en el catálogo de Código para el Desarrollo abordan parte del problema. Data Cleaner aplica reglas sintácticas a archivos CSV. OpenRefine permite limpieza manual desde el navegador. Atypical Data Classifier detecta anomalías en encuestas de hogares. Sin embargo, ninguna combina validación semántica con IA, corrección automática, y la capacidad de adaptarse a cualquier dominio de política pública mediante packs intercambiables.
+Las herramientas existentes en el catálogo de Código para el Desarrollo abordan parte del problema. Data Cleaner aplica reglas sintácticas a archivos CSV. OpenRefine permite limpieza manual desde el navegador. Atypical Data Classifier detecta anomalías en encuestas de hogares. Sin embargo, ninguna combina validación semántica con IA, corrección automática, y la capacidad de adaptarse a cualquier dominio de política pública mediante módulos intercambiables.
 
 ---
 
@@ -49,11 +49,11 @@ Las herramientas existentes en el catálogo de Código para el Desarrollo aborda
 
 Governance Agent aplica tres capas de validación secuencial sobre el consolidado de datos:
 
-**Capa 1 — Estructural**: Verifica tipos de datos, campos obligatorios, enumeraciones y rangos mínimo/máximo. Esta capa usa el schema declarativo definido en el Domain Pack del ministerio.
+**Capa 1 — Estructural**: Verifica tipos de datos, campos obligatorios, enumeraciones y rangos mínimo/máximo. Esta capa usa la configuración definida por el ministerio.
 
 **Capa 2 — Reglas de dominio**: Ejecuta validadores específicos del dominio escritos en Python. Por ejemplo: verificar que el monto de un subsidio no exceda el máximo legal permitido, que los códigos existan en el nomenclador, o que un beneficiario no esté duplicado entre programas.
 
-**Capa 3 — Semántica con IA**: Utiliza modelos de lenguaje (LLM) para razonar sobre los datos y detectar inconsistencias lógicas que las capas anteriores no pueden predecir. Por ejemplo: un registro con edad 25 y fecha de nacimiento 2010 es contradictorio, o un beneficiario con ingresos superiores al umbral del programa. El agente puede incorporar documentación normativa del dominio como respaldo para enriquecer el razonamiento semántico.
+**Capa 3 — Semántica con IA**: Utiliza inteligencia artificial para razonar sobre los datos y detectar inconsistencias lógicas que las capas anteriores no pueden predecir. Por ejemplo: un registro con edad 25 y fecha de nacimiento 2010 es contradictorio, o un beneficiario con ingresos superiores al umbral del programa. El agente puede incorporar documentación normativa del dominio como respaldo para enriquecer el razonamiento semántico.
 
 Cuando se detectan errores críticos, el agente usa IA para corregir automáticamente los datos y re-intenta la validación, hasta tres iteraciones. Los warnings no críticos se acumulan como preguntas en lote para el planificador, sin detener el proceso. Cada corrección aceptada o rechazada se almacena en memoria, y tras cinco aceptaciones de la misma corrección, se auto-promueve a regla automática. El agente aprende del dominio.
 
@@ -121,14 +121,14 @@ Una organización de la sociedad civil descarga los datos abiertos publicados po
 
 ## Nivel de esfuerzo de implementación
 
-**Alto** — Governance Agent es un framework que requiere equipo técnico para implementar. Cada ministerio necesita:
+**Alto** — Governance Agent es una herramienta que requiere equipo técnico para implementar. Cada ministerio necesita:
 
-1. **Crear su Domain Pack**: definir el nomenclador, las reglas semánticas y los validadores específicos de su dominio.
+1. **Crear su módulo de dominio**: definir el nomenclador, las reglas semánticas y los validadores específicos de su dominio.
 2. **Integrar con sus sistemas**: configurar la extracción de consolidados desde sus sistemas transaccionales.
-3. **Configurar las API keys de IA**: obtener acceso a al menos un proveedor de LLM compatible con la API de OpenAI (varios ofrecen free tier).
-4. **Capacitar al equipo**: en el mantenimiento y evolución de los packs.
+3. **Configurar las claves de acceso de IA**: obtener acceso a al menos un proveedor de IA compatible con la API de OpenAI (varios ofrecen nivel gratuito).
+4. **Capacitar al equipo**: en el mantenimiento y evolución de los módulos.
 
-El framework está diseñado para ser flexible: cada gobierno tiene sistemas distintos, nomencladores distintos, y reglas de dominio distintas. Por ello, el núcleo es abstracto y la configuración específica de cada ministerio se realiza mediante Domain Packs, que pueden crearse manualmente o generarse automáticamente desde los modelos de datos existentes en los sistemas de la institución.
+La herramienta está diseñada para ser flexible: cada gobierno tiene sistemas distintos, nomencladores distintos, y reglas de dominio distintas. Por ello, el núcleo es independiente del dominio y la configuración específica de cada ministerio se realiza mediante módulos intercambiables, que pueden crearse manualmente o generarse automáticamente desde los modelos de datos existentes en los sistemas de la institución.
 
 ---
 
@@ -136,7 +136,7 @@ El framework está diseñado para ser flexible: cada gobierno tiene sistemas dis
 
 - **Python 3.11+**
 - **Gestor de paquetes**: uv
-- **API LLM**: Cualquier proveedor compatible con la API de OpenIA (varios ofrecen free tier)
+- **Proveedor de IA**: Cualquier proveedor compatible con la API de OpenAI (varios ofrecen nivel gratuito)
 - **Sin dependencias pesadas**: no requiere pandas, numpy ni bases de datos externas para funcionamiento básico
 - **Despliegue**: local, on-premise o cloud
 
@@ -145,14 +145,14 @@ El framework está diseñado para ser flexible: cada gobierno tiene sistemas dis
 ## Roadmap
 
 **Completado:**
-- Núcleo abstracto con validación multi-capa
-- Integración LLM agnóstica (cualquier proveedor compatible con OpenAI) para validación semántica
+- Núcleo con validación multi-capa
+- Integración con IA agnóstica (cualquier proveedor compatible con OpenAI) para validación semántica
 - Auto-corrección de errores con IA
 - Memoria acumulativa con auto-promoción de reglas
 - Human-in-the-loop batch no intrusivo
-- Orquestador completo: validar → corregir → ejecutar
-- Auto-generación de packs desde modelos Pydantic
-- MCP server para integración con asistentes IA
+- Orquestador completo: validar → corregir
+- Auto-generación de módulos desde modelos existentes
+- Servidor de integración para asistentes IA
 
 **Futuras versiones:**
 - Conectores para sistemas gubernamentales (API, DB, CSV, SFTP)
@@ -174,4 +174,4 @@ El framework está diseñado para ser flexible: cada gobierno tiene sistemas dis
 
 ## Declaración de Bien Público Digital
 
-Governance Agent aspira a ser reconocido como Bien Público Digital por su contribución a la mejora de la calidad de los datos gubernamentales en América Latina y el Caribe. El framework es de código abierto bajo licencia Apache 2.0, permite uso comercial, y está diseñado para ser reutilizable por cualquier gobierno de la región sin dependencias de proveedores específicos.
+Governance Agent aspira a ser reconocido como Bien Público Digital por su contribución a la mejora de la calidad de los datos gubernamentales en América Latina y el Caribe. La herramienta es de código abierto bajo licencia Apache 2.0, permite uso comercial, y está diseñada para ser reutilizable por cualquier gobierno de la región sin dependencias de proveedores específicos.
