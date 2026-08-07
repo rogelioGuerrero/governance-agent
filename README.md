@@ -44,19 +44,57 @@ Para detalles de instalación, API, módulos y arquitectura, ver [docs/USO_TECNI
 
 ## El problema
 
-La formulación de políticas públicas en América Latina y el Caribe se basa en datos extraídos de sistemas transaccionales que presentan problemas endémicos de calidad:
+Los gobiernos toman decisiones de política pública basadas en datos que provienen de múltiples sistemas transaccionales —registros administrativos, censos, formularios—. Estos datos tienen problemas de calidad que nadie detecta antes de usarlos para decidir:
 
-1. **Inconsistencias lógicas no detectables por validación tradicional**: un formulario registra "edad: 25" y "fecha de nacimiento: 2010". Ambos campos son válidos individualmente, pero imposibles en conjunto. La validación estructural no lo detecta.
+- **Un mismo dato se llama distinto en cada sistema**: el Ministerio de Salud llama "cod_dx" al diagnóstico, el hospital lo llama "diagnostico", y el censo usa "CIE10". Nadie los reconcilia, y al consolidar los datos no se sabe que son la misma variable.
 
-2. **Nomencladores inconsistentes entre sistemas**: el Ministerio de Salud usa "cod_dx" para diagnóstico, el hospital usa "diagnostico", y el censo usa "CIE10". Ningún sistema reconcilia estas diferencias, lo que impide consolidar información para planificación.
+- **Datos que individualmente parecen correctos pero juntos son imposibles**: un registro dice "edad: 25" y "fecha de nacimiento: 2010". Cada campo por separado pasa la validación, pero juntos son contradictorios. Los sistemas tradicionales no detectan esto.
 
-3. **Datos geográficamente inválidos**: coordenadas fuera del área de operación, depósitos a 500km de las rutas de entrega, puntos duplicados.
+- **Datos fuera de rango o geográficamente inválidos**: un rendimiento de 50 toneladas por hectárea en papa cuando el rango normal es 15-25. Coordenadas que caen fuera del territorio de operación. Beneficiarios duplicados entre programas.
 
-4. **Errores de captura masivos**: el 30% de los registros de un consolidado pueden tener campos erróneos que pasan validación estructural pero son lógicamente imposibles. Estos errores propagan decisiones equivocadas a la política pública.
+- **Errores de captura masivos**: en un consolidado típico, hasta el 30% de los registros pueden tener campos erróneos que pasan los controles básicos pero son lógicamente imposibles. Esas decisiones se toman con datos equivocados sin que nadie lo sepa.
 
 ---
 
 ## Cómo funciona
+
+```mermaid
+flowchart LR
+    subgraph Sistemas["Sistemas del ministerio"]
+        S1["CRM"]
+        S2["Formularios"]
+        S3["Censo / RIPS"]
+    end
+
+    subgraph GA["Governance Agent"]
+        direction TB
+        C1["Capa 1: Estructural\n¿Faltan campos? ¿Tipos correctos?"]
+        C2["Capa 2: Semántica con IA\n¿Edad y fecha de nacimiento coinciden?"]
+        C3["Capa 3: Reglas del dominio\n¿Monto dentro del máximo legal?"]
+        AC["Auto-corrección con IA"]
+        MEM["Memoria: aprende\nde cada corrección"]
+
+        C1 --> C2 --> C3
+        C3 --> AC
+        AC -->|re-intenta| C1
+        C3 --> MEM
+    end
+
+    subgraph Entrega["Entregable"]
+        R["Reporte de Calidad\ndel Consolidado"]
+        D["Datos validados\ny corregidos"]
+    end
+
+    subgraph Decision["Toma de decisiones"]
+        P["Planificador decide\nsobre datos confiables"]
+    end
+
+    Sistemas -->|"consolidado de datos"| GA
+    GA -->|"score + issues"| R
+    GA -->|"datos limpios"| D
+    R --> P
+    D --> P
+```
 
 Governance Agent aplica tres capas de validación secuencial sobre el consolidado de datos:
 
