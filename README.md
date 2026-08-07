@@ -296,6 +296,14 @@ Una vez que el nomenclador está construido, la institución puede consultar el 
 - **¿Podemos actualizar el indicador sin crear un sistema nuevo?** — El gobierno consulta los caminos de interoperabilidad entre sistemas. Si el censo y el hospital comparten la variable "sexo" con el mismo clasificador ISO 5218, puede cruzarlos sin construir un nuevo pipeline.
 - **¿Podemos crear una política nueva con variables que ya existen?** — El gobierno descubre que tiene variables dispersas en tres ministerios que, combinadas, permiten diseñar un programa de transferencias condicionadas. El nomenclador identifica qué variables están disponibles, en qué fuentes, y qué calidad tienen — sin necesidad de nuevas encuestas.
 
+### Gobernanza de variables y respaldo normativo
+
+Cada variable del nomenclador tiene un **custodio institucional** (la persona o dirección responsable de mantenerla) y **respaldo normativo trazable** (la ley, resolución o norma que la respalda). Esto permite:
+
+- **Saber quién responde por cada variable** — si el indicador de cobertura de vacunación tiene problemas, el nomenclador dice que el custodio es la Dirección de Inmunizaciones, no hay que adivinar.
+- **Trazar el respaldo legal** — cada variable está vinculada al artículo específico de la norma que la respalda (ej: Art. 47 de la Ley General de Salud para vacunación obligatoria).
+- **Auditar el cumplimiento normativo** — el gobierno puede listar qué variables tienen respaldo normativo y cuáles no, identificando brechas de gobernanza antes de que se conviertan en problemas legales.
+
 ---
 
 ## Roadmap
