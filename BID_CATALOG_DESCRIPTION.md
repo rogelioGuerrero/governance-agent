@@ -107,7 +107,7 @@ Cuando una institución quiere diseñar o monitorear una política, necesita sab
 
 ### Trazabilidad y auditoría de variables
 
-Cada variable del nomenclador tiene un historial: quién la creó, quién la modificó, por qué, y cuándo. Si una variable cambia o se retira, el cambio queda registrado. Esto permite a la institución — y a los órganos de control — reconstruir el recorrido de cualquier dato que sustente una decisión de política pública.
+Cada variable del nomenclador tiene un historial: quién la creó, quién la modificó, por qué, y cuándo. Si una variable cambia o se retira, el cambio queda registrado. Esto permite a la institución — y a los órganos de control — reconstruir el recorrido de cualquier dato que sustente una decisión de política pública. Esto sustenta ejercicios de rendición de cuentas: la institución puede demostrar el estado de sus datos, qué calidad tienen, y qué está haciendo para mejorarlos.
 
 ### Registros administrativos con fines estadísticos
 
