@@ -113,6 +113,10 @@ Cada variable del nomenclador tiene un historial: quién la creó, quién la mod
 
 Un ministerio quiere usar los registros de vacunación para estimar cobertura nacional. Pero "vacunado" en el registro del hospital significa "dosis aplicada", mientras que en el censo significa "esquema completo". Governance Agent detecta que ambas fuentes tienen la variable "estado de vacunación" pero con distinta metodología de captura y distinta población objetivo, y advierte que no son directamente comparables — antes de que el ministerio publique un indicador equivocado.
 
+### Think tanks y sociedad civil
+
+Una organización de la sociedad civil descarga los datos abiertos publicados por tres ministerios y los carga en Governance Agent. El agente construye el nomenclador, evalúa la calidad de cada variable, detecta inconsistencias entre fuentes, y genera un informe de factibilidad: qué políticas públicas se pueden sustentar con los datos disponibles, qué variables faltan, y dónde hay brechas de calidad. El think tank publica el informe como evidencia para el debate público — sin necesidad de acceso a sistemas internos del gobierno.
+
 ---
 
 ## Nivel de esfuerzo de implementación
