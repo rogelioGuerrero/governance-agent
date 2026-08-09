@@ -47,7 +47,7 @@ from .verifier import (
     verify_graph_invariants,
 )
 from .health import check_health, fix_orphan_nodes, retry_stuck_proposals, format_health_report
-from .lifecycle import recall_feedback as lifecycle_recall_feedback
+from .lifecycle import recall_feedback as lifecycle_recall_feedback, log_event as lifecycle_log_event
 
 from semantic_tools.similarity import (
     cosine_similarity as st_cosine,
@@ -89,38 +89,26 @@ logger = logging.getLogger(__name__)
 NOMENCLADOR_PATH = Path(__file__).parent.parent / "nomenclador" / "nomenclador.json"
 
 SYSTEM_PROMPT = """Eres un agente de governance para interoperabilidad semantica.
-Tu trabajo es ayudar a verificar, mapear y transformar variables entre fuentes de datos.
-
-Tienes acceso a tools nativas (function calling). Usa las tools cuando necesites informacion
-o ejecutar acciones. Cuando ya tengas toda la informacion, responde directamente al usuario
-sin usar tools.
+Verificas, mapeas y transformas variables entre fuentes de datos.
 
 REGLAS:
-- Una sola tool por turno.
-- Siempre razona brevemente antes de actuar (en el campo content).
-- Si los guardrails detectan asimetría, mencionalo explicitamente.
-- Si no estás seguro, usa ask_human.
-- Responde en español.
-- Sé conciso pero completo.
-- CALIDAD DE DATOS: Cuando veas quality_score de un campo, considera su confiabilidad:
-  * score >= 0.7 = alta confianza, usar normalmente
-  * score 0.4-0.7 = confianza media, mencionar advertencia al usuario
-  * score < 0.4 = baja confianza, NO recomendar usar este campo para interoperabilidad sin limpieza previa
-- REVIEW STATUS: Si un campo esta en "proposed" o "rejected", no usarlo para transformaciones.
-- STALENESS: Si last_verified tiene mas de 180 dias, mencionar que el dato podria estar desactualizado.
-- COMPUTE, DON'T GUESS: Prefiere tools deterministas (verify_field, verify_mapping, compute_confidence, compute_transform, audit_graph) sobre razonamiento probabilistico. Usa generate_transform solo cuando compute_transform no encuentre mapping en el grafo. Usa validate_interop para guardrails cualitativos, pero SIEMPRE complementa con compute_confidence para el score cuantitativo.
-- SELF-MONITORING: Usa graph_health para diagnosticar el estado del grafo. Si detectas nodos huerfanos, usa fix_orphans. Si hay proposals stale, usa retry_proposals. Auto-sana lo que puedas, flaggea lo que requiera humano.
-- AUTO-HEALING: Despues de ingest o nomenclar, considera ejecutar graph_health para verificar que el grafo quedo consistente. Si hay violaciones, intenta fix_orphans antes de reportar al humano.
-- VALUE-LEVEL EQUIVALENCE: Para descubrir equivalencias semanticas entre datasets de formato largo (donde el significado esta en los valores, no en los nombres de columnas), usa sample_column_values para extraer valores unicos de una columna, y luego compare_value_sets para que el LLM razone sobre equivalencias entre dos conjuntos de valores. Para casos donde la combinacion de 2+ columnas (ej: Item+Element) equivale a una sola columna en otro dataset, usa compare_composite_values. Despues de descubrir equivalencias, usa persist_equivalences para guardarlas en el grafo como aristas EQUIVALE_A. Este es el unico modo de descubrir equivalencias no obvias que validate_interop no puede detectar.
-- DETERMINISTIC SIMILARITY: Usa semantic_similarity para comparar dos columnas cuantitativamente (cosine, jaccard, overlap) sin gastar tokens de LLM. Usa text_similarity para comparar definiciones de conceptos via TF-IDF. Usa composite_similarity para combinar ambos (valores + texto) en un solo score. Estas tools son deterministas y gratuitas — usalas como pre-filtro antes de compare_value_sets (LLM) para descartar pares obvios.
-- STATISTICAL ANALYSIS: Usa compare_distributions para comparar dos columnas numericas con Welch t-test (diferencia significativa de medias) o chi_square_test (distribucion categorica). Usa correlation para verificar si dos columnas estan correlacionadas (Pearson o Spearman). Usa distribution_summary para inspeccionar la distribucion de una columna (media, mediana, std, cuartiles, cardinalidad). Todas deterministas, sin LLM.
-- COLUMN CLUSTERING: Usa cluster_columns para agrupar columnas de un dataset por perfil estructural (tipo, cardinalidad, missing, etc.). Usa optimal_k para encontrar el numero optimo de clusters via elbow method. Util para descubrir columnas similares dentro de un mismo dataset antes de comparar entre datasets.
-- DATA QUALITY: Usa column_quality para detectar anomalias (outliers IQR/zscore en numericas, valores raros o artefactos de encoding en categoricas) y obtener un score de calidad 0-100. Usa auto_clean para limpiar whitespace, encoding mojibake, y fill de valores faltantes. Ejecuta column_quality ANTES de recomendar interoperabilidad con un campo de baja calidad.
-- AUTONOMOUS PIPELINE: Para mapear dos datasets completos, usa profile_dataset para perfilar todas las columnas en un solo paso, luego auto_match para ejecutar similarity + statistics + quality en batch y obtener mapeos con score de confianza. Los mapeos de alta confianza (>=0.7) se persisten en el grafo automaticamente. Los de confianza media (0.4-0.7) se escalan a ask_human. Los bajos se descartan. NO uses tool por tool manualmente cuando auto_match puede hacer todo en un paso.
-- PROFILE FIRST: Antes de cualquier comparacion entre datasets, usa profile_dataset para entender que tipo de datos tiene cada columna (numerica, categorica, fecha, ID, booleano, libre). Esto evita comparar columnas incompatibles.
-- LEARNING LOOP: Si ves "DECISIONES PREVIAS RELEVANTES" en el contexto, considera ese feedback antes de proponer mapeos o crear conceptos. Si un humano rechazo algo similar antes, no repitas el mismo error. Usa recall_feedback para buscar mas contexto si lo necesitas.
-- COMMUNITY DETECTION: Usa detect_communities para descubrir grupos de variables relacionadas estructuralmente (Louvain, sin LLM). Usa community_reports para generar resumenes narrativos de cada grupo con LLM. Usa global_search para responder preguntas transversales sobre todo el nomenclador (ej: "que areas tematicas cubre?", "hay brechas de cobertura?"). Estas tools emulan GraphRAG Global Search.
+- Una sola tool por turno. Razona brevemente antes de actuar.
+- COMPUTE, DON'T GUESS: prefiere tools deterministas sobre razonamiento.
+- CALIDAD: score >= 0.7 alta, 0.4-0.7 media (advertir), < 0.4 no usar sin limpieza.
+- Si no estás seguro, usa ask_human. Responde en español, sé conciso.
 """
+
+# Reglas detalladas (no se envian al LLM, se mantienen como documentacion para el desarrollador):
+# - REVIEW STATUS: no usar campos proposed/rejected para transformaciones.
+# - STALENESS: si last_verified > 180 dias, mencionar que podria estar desactualizado.
+# - SELF-MONITORING: usar graph_health para diagnosticar. fix_orphans para auto-sana.
+# - VALUE-LEVEL EQUIVALENCE: sample_column_values + compare_value_sets para formato largo.
+# - DETERMINISTIC SIMILARITY: semantic_similarity, text_similarity, composite_similarity (sin LLM).
+# - STATISTICAL ANALYSIS: compare_distributions, correlation, distribution_summary (sin LLM).
+# - DATA QUALITY: column_quality antes de recomendar interoperabilidad. auto_clean para limpiar.
+# - AUTONOMOUS PIPELINE: profile_dataset + auto_match para mapeo batch completo.
+# - LEARNING LOOP: considerar decisiones previas (recall_feedback) antes de proponer.
+# - COMMUNITY DETECTION: detect_communities + community_reports + global_search (GraphRAG).
 
 
 # === STATE ===
@@ -134,6 +122,7 @@ class AgentState(TypedDict):
     current_action_input: str
     tool_call_id: str  # ID del tool_call para feed-back nativo
     tool_result: str
+    tool_objects: dict  # pass-by-reference: resultados completos de tools por action name
     iteration: int
     final_answer: str
     needs_human_input: str  # pregunta al humano si necesita aclaración
@@ -1354,6 +1343,42 @@ def tool_recall_feedback(query: str) -> str:
     return "\n".join(lines)
 
 
+def tool_get_detail(tool_name: str) -> str:
+    """Obtiene el resultado completo (sin truncar) de una tool ejecutada anteriormente.
+
+    Usa esta tool cuando una tool anterior retorno un resultado truncado
+    (marcado con '... (truncado)') y necesitas ver el detalle completo.
+    """
+    # Esta tool se resuelve en act_node con acceso al state,
+    # pero como las tools son funciones puras, usamos un atributo de clase.
+    # El resultado real se inyecta desde act_node via tool_objects.
+    return f"No hay resultado guardado para '{tool_name}'. Usa la tool directamente."
+
+
+# Cache global para tool_get_detail (act_node lo popula antes de ejecutar)
+_tool_objects_cache: dict = {}
+
+
+def tool_remember_decision(concept_id: str, action: str, reason: str) -> str:
+    """Guarda una decision del agente en el decision log para aprendizaje futuro.
+
+    Usa esta tool despues de descubrir una equivalencia, validar una interop,
+    o detectar un problema. El agente del futuro podra recuperar estas
+    decisiones con recall_feedback y evitar repetir errores.
+    """
+    # Normalizar concept_id si no tiene prefijo
+    if not concept_id.startswith("concept:"):
+        concept_id = f"concept:{concept_id}"
+    lifecycle_log_event(
+        concept_id=concept_id,
+        action=action,
+        actor="agent",
+        reason=reason,
+        details="remembered_by_agent",
+    )
+    return f"Decision guardada: {action} para {concept_id} — {reason}"
+
+
 # === COMMUNITY DETECTION + GLOBAL SEARCH (inspirado en GraphRAG) ===
 
 def tool_detect_communities(resolution: str = "1.0") -> str:
@@ -1411,6 +1436,8 @@ def tool_community_reports(resolution: str = "1.0") -> str:
 
 TOOLS = {
     "recall_feedback": tool_recall_feedback,
+    "remember_decision": tool_remember_decision,
+    "get_detail": tool_get_detail,
     "search_graph": tool_search_graph,
     "detect_standard": tool_detect_standard,
     "validate_interop": tool_validate_interop,
@@ -1448,6 +1475,8 @@ TOOLS = {
 
 TOOLS_SCHEMA = {
     "recall_feedback": {"query": "str"},
+    "remember_decision": {"concept_id": "str", "action": "str", "reason": "str"},
+    "get_detail": {"tool_name": "str"},
     "search_graph": {"query": "str"},
     "detect_standard": {"column_name": "str", "sample_values": "list[str]"},
     "validate_interop": {"source_db": "str", "target_db": "str"},
@@ -1487,6 +1516,8 @@ TOOLS_SCHEMA = {
 # Descripciones de tools para el schema OpenAI
 _TOOL_DESCRIPTIONS = {
     "recall_feedback": "Recupera decisiones pasadas del decision log relevantes para una consulta. Retorna rechazos, aprobaciones y cambios de estado con razon. Usa ANTES de proponer un mapeo o crear un concepto para verificar si ya hubo decisiones humanas sobre el tema.",
+    "remember_decision": "Guarda una decision del agente en el decision log. Usa DESPUES de descubrir una equivalencia, validar interop, o detectar un problema. El agente del futuro recuperara esta decision con recall_feedback.",
+    "get_detail": "Obtiene el resultado completo (sin truncar) de una tool ejecutada anteriormente. Usa cuando una tool anterior retorno '(truncado)' y necesitas ver el detalle completo.",
     "search_graph": "Busca una variable en el nomenclador. Retorna concepto canonico + fuentes con quality_score y review_status.",
     "detect_standard": "Detecta el estandar para una columna dado su nombre y valores muestra.",
     "validate_interop": "Verifica interoperabilidad entre dos fuentes con guardrails (poblacion, metodologia, clasificador, distribucion).",
@@ -1533,11 +1564,74 @@ _PY_TO_OPENAI_TYPE = {
 }
 
 
-def _build_openai_tools_schema() -> list[dict]:
-    """Generar schema de tools en formato OpenAI function calling desde TOOLS_SCHEMA."""
+# Tools principales (se envian al LLM por defecto)
+PRIMARY_TOOLS = {
+    "search_graph", "list_concepts", "get_concept_context", "validate_interop",
+    "generate_transform", "compute_confidence", "compute_transform",
+    "graph_health", "ask_human", "recall_feedback", "remember_decision",
+    "get_detail",
+    "profile_dataset", "auto_match", "column_quality", "auto_clean",
+    "semantic_similarity",
+}
+
+# Tools avanzadas (solo se envian si la consulta las requiere)
+ADVANCED_TOOLS = {
+    "detect_standard", "get_classifier", "verify_field", "verify_mapping",
+    "audit_graph", "fix_orphans", "retry_proposals",
+    "sample_column_values", "compare_value_sets", "compare_composite_values",
+    "persist_equivalences", "text_similarity", "composite_similarity",
+    "compare_distributions", "correlation", "distribution_summary",
+    "cluster_columns", "detect_communities", "global_search", "community_reports",
+}
+
+# Keywords que activan tools avanzadas
+_ADVANCED_KEYWORDS = {
+    "detect_standard": ["estandar", "standard", "norma"],
+    "get_classifier": ["clasificador", "classifier", "valores validos"],
+    "verify_field": ["verificar field", "verificar campo", "consistency"],
+    "verify_mapping": ["biyectividad", "mapping", "inyeccion"],
+    "audit_graph": ["audit", "auditar", "invariante"],
+    "fix_orphans": ["huerfano", "orphan", "fix_orphans"],
+    "retry_proposals": ["stale", "proposal", "propuesta"],
+    "sample_column_values": ["valores unicos", "formato largo", "value set"],
+    "compare_value_sets": ["comparar valores", "equivalencia semantica", "value-level"],
+    "compare_composite_values": ["compuesto", "composite", "item+element"],
+    "persist_equivalences": ["persistir", "guardar equivalencia"],
+    "text_similarity": ["tf-idf", "definicion", "text similarity"],
+    "composite_similarity": ["composite similarity"],
+    "compare_distributions": ["distribucion", "t-test", "chi-square", "welch"],
+    "correlation": ["correlacion", "pearson", "spearman"],
+    "distribution_summary": ["mediana", "cuartil", "estadistica"],
+    "cluster_columns": ["cluster", "agrupar", "k-means"],
+    "detect_communities": ["comunidad", "louvain", "community"],
+    "global_search": ["global", "transversal", "areas tematicas", "brechas"],
+    "community_reports": ["reporte comunidad", "community report"],
+}
+
+
+def _select_tools_for_query(query: str) -> set[str]:
+    """Determinar qué tools enviar al LLM segun la consulta."""
+    selected = set(PRIMARY_TOOLS)
+    query_lower = query.lower()
+    for tool_name, keywords in _ADVANCED_KEYWORDS.items():
+        if any(kw in query_lower for kw in keywords):
+            selected.add(tool_name)
+    return selected
+
+
+def _build_openai_tools_schema(tool_names: set[str] | None = None) -> list[dict]:
+    """Generar schema de tools en formato OpenAI function calling desde TOOLS_SCHEMA.
+    
+    Si tool_names es None, envia solo las tools principales.
+    Si se pasa un set, filtra a esas tools.
+    """
+    if tool_names is None:
+        tool_names = PRIMARY_TOOLS
     _OPTIONAL_PARAMS = {"dry_run", "test_type", "k", "method", "resolution"}
     tools = []
     for name, params in TOOLS_SCHEMA.items():
+        if name not in tool_names:
+            continue
         properties = {}
         required = []
         for param_name, param_type in params.items():
@@ -1565,7 +1659,10 @@ def _build_openai_tools_schema() -> list[dict]:
     return tools
 
 
+# Schema con solo tools principales (default)
 OPENAI_TOOLS_SCHEMA = _build_openai_tools_schema()
+# Schema con todas las tools (para casos que lo requieren)
+ALL_TOOLS_SCHEMA = _build_openai_tools_schema(PRIMARY_TOOLS | ADVANCED_TOOLS)
 
 
 # === NODES (native tool calling) ===
@@ -1631,10 +1728,17 @@ def think_node(state: AgentState) -> AgentState:
         else:
             messages.append({"role": "assistant", "content": str(msg)})
 
+    # Seleccionar tools relevantes para esta consulta (solo en iteracion 0)
+    if state.get("iteration", 0) == 0:
+        selected = _select_tools_for_query(state["user_query"])
+    else:
+        selected = _select_tools_for_query(state["user_query"])
+    tools_schema = _build_openai_tools_schema(selected)
+
     try:
         result = call_groq_with_tools(
             messages,
-            tools=OPENAI_TOOLS_SCHEMA,
+            tools=tools_schema,
             temperature=0.2,
             max_tokens=2000,
         )
@@ -1718,13 +1822,80 @@ def act_node(state: AgentState) -> AgentState:
     except json.JSONDecodeError:
         args = {"query": action_input_raw} if action_input_raw else {}
 
+    # Validar tipos de argumentos antes de ejecutar (inspirado en NOOA typed I/O)
+    expected_schema = TOOLS_SCHEMA.get(action, {})
+    validated_args = {}
+    type_errors = []
+    for param_name, expected_type in expected_schema.items():
+        if param_name not in args:
+            continue
+        val = args[param_name]
+        if expected_type == "str" and not isinstance(val, str):
+            validated_args[param_name] = str(val)
+        elif expected_type == "bool" and not isinstance(val, bool):
+            if isinstance(val, str):
+                validated_args[param_name] = val.lower() in ("true", "1", "yes")
+            else:
+                validated_args[param_name] = bool(val)
+        elif expected_type == "int" and not isinstance(val, int):
+            try:
+                validated_args[param_name] = int(val)
+            except (ValueError, TypeError):
+                type_errors.append(f"{param_name} debe ser int, got {type(val).__name__}")
+        elif expected_type == "float" and not isinstance(val, (int, float)):
+            try:
+                validated_args[param_name] = float(val)
+            except (ValueError, TypeError):
+                type_errors.append(f"{param_name} debe ser float, got {type(val).__name__}")
+        elif expected_type == "list[str]" and not isinstance(val, list):
+            if isinstance(val, str):
+                validated_args[param_name] = [val]
+            else:
+                validated_args[param_name] = [str(val)]
+        else:
+            validated_args[param_name] = val
+
+    # Parametros extra que no estan en el schema — ignorar con warning
+    extra_params = set(args.keys()) - set(expected_schema.keys())
+    if extra_params:
+        logger.warning("act_node: tool %r recibio params extra ignorados: %s", action, extra_params)
+
+    if type_errors:
+        error_msg = "Error de tipos en argumentos: " + "; ".join(type_errors)
+        logger.warning("act_node: tool %r type errors: %s", action, type_errors)
+        return {
+            **state,
+            "tool_result": error_msg,
+            "messages": state.get("messages", []) + [{
+                "role": "tool",
+                "tool_call_id": tool_call_id,
+                "content": error_msg,
+            }],
+        }
+
     try:
-        result = TOOLS[action](**args) if args else TOOLS[action]()
+        result = TOOLS[action](**validated_args) if validated_args else TOOLS[action]()
     except Exception as e:
         logger.warning("act_node: tool %r fallo: %s", action, e)
         result = f"Error ejecutando {action}: {e}"
 
+    # Pass-by-reference: guardar resultado crudo en tool_objects del state
+    tool_objects = dict(state.get("tool_objects", {}))
+    if action == "get_detail":
+        # get_detail resuelve desde el cache de tool_objects
+        detail_tool_name = validated_args.get("tool_name", "")
+        if detail_tool_name in tool_objects:
+            result = tool_objects[detail_tool_name]
+        else:
+            result = f"No hay resultado guardado para '{detail_tool_name}'. Tools con resultados: {', '.join(tool_objects.keys())}"
+    else:
+        # Guardar resultado crudo (sin truncar) para get_detail
+        tool_objects[action] = result
+        # Tambien poblar el cache global por si tool_get_detail se llama directamente
+        _tool_objects_cache[action] = result
+
     # Construir mensaje tool para feed-back al LLM en el proximo think
+    # Truncar a 2000 chars (preview acotado, el scratchpad guarda el resultado completo)
     result_str = str(result)
     if len(result_str) > 2000:
         cut = result_str.rfind('}', 0, 2000)
@@ -1748,6 +1919,7 @@ def act_node(state: AgentState) -> AgentState:
     return {
         **state,
         "tool_result": result,
+        "tool_objects": tool_objects,
         "messages": messages,
     }
 
@@ -1858,11 +2030,52 @@ def build_agent_graph():
 
 # === RUN ===
 
-def run_agent(query: str, max_iterations: int = 8) -> dict:
+# Clasificacion de consulta por keywords (sin LLM, sin tokens)
+_QUERY_CATEGORIES = {
+    "busqueda": {
+        "keywords": ["que variable", "que concepto", "buscar", "existe", "listar", "lista", "cuales", "mostrar", "ver"],
+        "max_iterations": 3,
+    },
+    "validacion": {
+        "keywords": ["puedo cruzar", "interoperab", "validar", "compatib", "verificar", "puedo unir"],
+        "max_iterations": 8,
+    },
+    "transformacion": {
+        "keywords": ["transform", "mapear", "mapping", "convertir", "sql", "case when"],
+        "max_iterations": 8,
+    },
+    "calidad": {
+        "keywords": ["calidad", "quality", "limpiar", "clean", "anomalia", "outlier", "missing"],
+        "max_iterations": 5,
+    },
+    "despliegue": {
+        "keywords": ["desplegar", "deploy", "ruta", "vrp", "accesibilidad", "cobertura"],
+        "max_iterations": 6,
+    },
+}
+
+
+def _classify_query(query: str) -> tuple[str, int]:
+    """Clasifica la consulta por keywords y retorna (categoria, max_iterations).
+    Sin LLM — puramente determinista, 0 tokens.
+    """
+    query_lower = query.lower()
+    for category, config in _QUERY_CATEGORIES.items():
+        if any(kw in query_lower for kw in config["keywords"]):
+            return category, config["max_iterations"]
+    return "general", 4
+
+
+def run_agent(query: str, max_iterations: int = None) -> dict:
     """
     Ejecutar el agente ReAct con una consulta del usuario.
-    Retorna dict con: final_answer, scratchpad, needs_human_input, iterations, tools_used, health_verified.
+    Retorna dict con: final_answer, scratchpad, needs_human_input, iterations, tools_used, health_verified, query_category.
     """
+    # Pre-clasificar consulta para ajustar iteraciones (sin LLM)
+    category, suggested_iter = _classify_query(query)
+    if max_iterations is None:
+        max_iterations = suggested_iter
+
     app = build_agent_graph()
     
     initial_state = AgentState(
@@ -1913,6 +2126,7 @@ def run_agent(query: str, max_iterations: int = 8) -> dict:
         "iterations": result.get("iteration", 0),
         "tools_used": tools_used,
         "health_verified": health_verified,
+        "query_category": category,
     }
 
 
