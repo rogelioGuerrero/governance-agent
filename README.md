@@ -164,6 +164,8 @@ Cada variable del nomenclador tiene un **custodio institucional** (la persona o 
 
 A partir de las variables disponibles en el nomenclador, el agente genera insights sobre las fuentes de datos: qué variables tienen mejor calidad, qué variables permiten cruzar información entre fuentes, y qué combinaciones de variables habilitan nuevos indicadores. El agente puede sugerir políticas o programas que la institución podría implementar con los datos que ya tiene — sin necesidad de recolectar información nueva.
 
+Para cada hipótesis descubierta, el agente genera automáticamente un **plan de análisis accionable**: pasos concretos (qué fuentes cruzar, por qué campo, qué agregación hacer, qué visualización respondería la pregunta), con esfuerzo estimado y riesgos identificados. El planificador recibe no solo la idea, sino el camino para ejecutarla.
+
 ### ¿Podemos implementar esta política?
 
 Cuando una institución quiere diseñar o monitorear una política, necesita saber si tiene los datos para hacerlo. El agente lee la descripción de la política, identifica qué variables se necesitan, busca cada una en el nomenclador, y responde: **¿podemos hacerlo con los datos que tenemos hoy, necesitamos ajustes, o todavía no es posible?** El reporte dice qué variables existen y en qué sistemas, cuáles faltan, y qué porcentaje de la política se puede sustentar con datos actuales.
@@ -228,10 +230,20 @@ La herramienta está diseñada para ser flexible: cada gobierno tiene sistemas d
 - Orquestador completo: validar → corregir
 - Auto-generación de módulos desde modelos existentes
 - Servidor de integración para asistentes IA
+- Nomenclador canónico como puente entre sistemas (knowledge graph con conceptos, fuentes, clasificadores y normativas)
+- Ingesta semi-automática de esquemas sucios (CSV, Excel, SQL DDL) con plan de aprobación humana
+- Assessment rápido de datasets: quality score, detección de PII, anomalías y matching automático
+- Análisis enriquecido con inferencia de metadata vía LLM y persistencia automática al knowledge graph
+- Análisis multi-agente (jurídico, técnico, estadístico) con síntesis integrada
+- Consulta de factibilidad de políticas públicas: ¿podemos implementar esta política con los datos que tenemos?
+- Descubrimiento automático de oportunidades de política pública desde los datos del nomenclador
+- Plan de análisis accionable por cada hipótesis descubierta (pasos, fuentes, esfuerzo, riesgos)
+- Trazabilidad y auditoría de variables con decision log persistente
+- Detección de comunidades de variables relacionadas y búsqueda global en el grafo
 
 **Futuras versiones:**
 - Conectores para sistemas gubernamentales (API, DB, CSV, SFTP)
-- Nomenclador canónico como puente entre sistemas
+- Ejecución automática de planes de análisis (joins, agregaciones y visualizaciones contra datos reales)
 - UI web para planificadores no técnicos
 - Dashboard de calidad de datos por dominio
 
