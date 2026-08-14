@@ -5,6 +5,7 @@ description = "Agente de governance para interoperabilidad semantica - Nomenclad
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "fastapi>=0.115.0",
     "httpx>=0.28.1",
     "langchain-core>=1.4.9",
     "langgraph>=1.2.8",
@@ -13,6 +14,7 @@ dependencies = [
     "psycopg[binary]>=3.2.0",
     "python-dotenv>=1.2.2",
     "rich>=15.0.0",
+    "uvicorn>=0.34.0",
 ]
 
 [project.optional-dependencies]
@@ -22,7 +24,11 @@ dev = [
     "ruff>=0.8",
     "mypy>=1.13",
 ]
+explorer = [
+    "nomenclador-explorer[explorer] @ git+https://github.com/rogelioGuerrero/nomenclador-explorer.git",
+]
 
 [project.scripts]
 nomenclador-mcp = "src.mcp_server:main"
 governance = "src.cli:main"
+governance-api = "src.api:main"

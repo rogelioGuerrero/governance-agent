@@ -47,6 +47,7 @@ from .health import check_health, fix_orphan_nodes, retry_stuck_proposals, forma
 from .policy import analyze_policy_problem
 from .discover import discover, generate_insights_for_source, deep_dive
 from .rapid_assessment import assess_csv, format_report_markdown, format_report_plain
+from .graph.explorer import export_graph, launch_explorer
 from .enriched_analysis import run_enriched_analysis, format_enriched_report_markdown, format_enriched_report_plain
 
 logger = logging.getLogger(__name__)
@@ -2305,6 +2306,8 @@ def main():
         console.print("  enriched-analysis <csv>  Pass 2: metadata + re-matching + MoA [--metadata file.json] [--output file.md] [--skip-moa]")
         console.print("  communities            Detectar comunidades de variables relacionadas (Louvain)")
         console.print("                          Flags: [--reports] [--resolution N]")
+        console.print("  explorer               Exportar grafo y lanzar Semantica Knowledge Explorer (UI web)")
+        console.print("                          Flags: [--launch] [--port N] [--no-browser] [--output file.json]")
         return
 
     cmd = sys.argv[1]
@@ -2524,6 +2527,26 @@ def main():
                 except ValueError:
                     pass
         cmd_communities(reports=do_reports, resolution=resolution)
+    elif cmd == "explorer":
+        do_launch = "--launch" in sys.argv
+        no_browser = "--no-browser" in sys.argv
+        port = 8000
+        if "--port" in sys.argv:
+            idx = sys.argv.index("--port")
+            if idx + 1 < len(sys.argv):
+                try:
+                    port = int(sys.argv[idx + 1])
+                except ValueError:
+                    pass
+        output_file = ""
+        if "--output" in sys.argv:
+            idx = sys.argv.index("--output")
+            if idx + 1 < len(sys.argv):
+                output_file = sys.argv[idx + 1]
+        if do_launch:
+            launch_explorer(port=port, no_browser=no_browser)
+        else:
+            export_graph(output_file or None)
     else:
         console.print(f"[red]Comando no reconocido: {cmd}[/red]")
 
