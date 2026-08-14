@@ -14,6 +14,9 @@ Endpoints:
   GET  /api/health                  — Health check del grafo
   GET  /api/interop/{source}/{target} — Interoperabilidad entre fuentes
   GET  /api/transform/{source}/{target} — Transform SQL entre fuentes
+  POST /api/normative/upload          — Subir documento normativo al corpus RAG
+  GET  /api/normative/search          — Buscar en corpus normativo
+  GET  /api/normative/corpus          — Listar corpus normativo
 
 Uso:
     governance-api --port 8001
@@ -370,6 +373,114 @@ def create_app() -> FastAPI:
         return {"source": source_db, "target": target_db, "transforms": transforms}
 
     # ------------------------------------------------------------------
+    # Normative RAG — corpus documental de respaldo
+    # ------------------------------------------------------------------
+
+    @app.post("/api/normative/upload")
+    async def normative_upload(
+        file: UploadFile = File(...),
+        tags: str = Query("", description="Comma-separated tags (concept names)"),
+    ):
+        """Sube un documento normativo al corpus RAG.
+
+        Chunking + embeddings (Cohere) + almacenamiento en normative_corpus.json.
+        El agent usara este corpus para buscar respaldo de variables.
+        """
+        from .normative_rag import NormativeRAG
+
+        raw = await file.read()
+        if not raw:
+            raise HTTPException(status_code=400, detail="Empty file")
+
+        tag_list = [t.strip() for t in tags.split(",") if t.strip()] if tags else None
+        source_name = Path(file.filename or "upload").stem
+
+        with tempfile.NamedTemporaryFile(
+            suffix=f"_{file.filename}", delete=False, mode="wb"
+        ) as tmp:
+            tmp.write(raw)
+            tmp_path = tmp.name
+
+        try:
+            rag = NormativeRAG()
+            n_chunks = rag.ingest_file(tmp_path, source=source_name, tags=tag_list)
+            if n_chunks == 0:
+                raise HTTPException(
+                    status_code=400,
+                    detail="No se pudieron extraer chunks del documento. Requiere COHERE_API_KEY para embeddings.",
+                )
+            stats = rag.stats()
+            return {
+                "source": source_name,
+                "filename": file.filename,
+                "tags": tag_list or [],
+                "chunks_ingested": n_chunks,
+                "corpus_total_chunks": stats["total_chunks"],
+                "corpus_total_sources": stats["total_sources"],
+            }
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.exception("normative_upload error")
+            raise HTTPException(status_code=500, detail=str(e))
+        finally:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+
+    @app.get("/api/normative/search")
+    async def normative_search(
+        q: str = Query(..., description="Search query (variable name or keyword)"),
+        top_k: int = Query(5, description="Max results"),
+    ):
+        """Busca en el corpus normativo (hybrid: BM25 + cosine similarity)."""
+        from .normative_rag import NormativeRAG
+
+        try:
+            rag = NormativeRAG()
+            if rag.stats()["total_chunks"] == 0:
+                return {"results": [], "count": 0, "total_chunks": 0}
+            results = rag.search(q, top_k=top_k)
+            return {
+                "query": q,
+                "results": results,
+                "count": len(results),
+                "total_chunks": rag.stats()["total_chunks"],
+            }
+        except Exception as e:
+            logger.exception("normative_search error")
+            raise HTTPException(status_code=500, detail=str(e))
+
+    @app.get("/api/normative/corpus")
+    async def normative_corpus():
+        """Lista metadata del corpus normativo (sin embeddings)."""
+        from .normative_rag import NormativeRAG
+
+        try:
+            rag = NormativeRAG()
+            stats = rag.stats()
+            chunks = [
+                {
+                    "id": c.id,
+                    "source": c.source,
+                    "source_type": c.source_type,
+                    "chunk_index": c.chunk_index,
+                    "text": c.text[:200] + "..." if len(c.text) > 200 else c.text,
+                    "tags": c.tags,
+                }
+                for c in rag.chunks
+            ]
+            return {
+                "total_chunks": stats["total_chunks"],
+                "total_sources": stats["total_sources"],
+                "chunks": chunks,
+            }
+        except Exception as e:
+            logger.exception("normative_corpus error")
+            raise HTTPException(status_code=500, detail=str(e))
+
+    # ------------------------------------------------------------------
     # Health
     # ------------------------------------------------------------------
 
@@ -408,6 +519,9 @@ def create_app() -> FastAPI:
                 "GET  /api/concepts/{name}",
                 "GET  /api/interop/{source}/{target}",
                 "GET  /api/transform/{source}/{target}",
+                "POST /api/normative/upload",
+                "GET  /api/normative/search",
+                "GET  /api/normative/corpus",
                 "GET  /api/health",
             ],
         }
